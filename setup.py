@@ -84,13 +84,17 @@ def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
       - Map requested 110 -> 101 if CUDA < 13.0 (Thor rename)
       - Embed PTX for newest arch for forward compatibility
     """
+    supported_ptx_archs = []
+
     # Always-regular 80
     if "80" in archs:
         cc_flag += ["-gencode", "arch=compute_80,code=sm_80"]
+        supported_ptx_archs.append("80")
 
     # Hopper 9.0 needs >= 11.8
     if bare_metal_version >= Version("11.8") and "90" in archs:
         cc_flag += ["-gencode", "arch=compute_90,code=sm_90"]
+        supported_ptx_archs.append("90")
 
     # Blackwell 10.x requires >= 12.8
     if bare_metal_version >= Version("12.8"):
@@ -98,31 +102,39 @@ def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
             # CUDA 12.9 introduced "family-specific" for Blackwell (100f)
             if bare_metal_version >= Version("12.9"):
                 cc_flag += ["-gencode", "arch=compute_100f,code=sm_100"]
+                supported_ptx_archs.append("100f")
             else:
                 cc_flag += ["-gencode", "arch=compute_100,code=sm_100"]
+                supported_ptx_archs.append("100")
 
         if "120" in archs:
             # sm_120 is supported in CUDA 12.8/12.9+ toolkits
             if bare_metal_version >= Version("12.9"):
                 cc_flag += ["-gencode", "arch=compute_120f,code=sm_120"]
+                supported_ptx_archs.append("120f")
             else:
                 cc_flag += ["-gencode", "arch=compute_120,code=sm_120"]
+                supported_ptx_archs.append("120")
 
 
         # Thor rename: 12.9 uses sm_101; 13.0+ uses sm_110
         if "110" in archs:
             if bare_metal_version >= Version("13.0"):
                 cc_flag += ["-gencode", "arch=compute_110f,code=sm_110"]
+                supported_ptx_archs.append("110f")
             else:
                 # Provide Thor support for CUDA 12.9 via sm_101
                 if bare_metal_version >= Version("12.8"):
                     cc_flag += ["-gencode", "arch=compute_101,code=sm_101"]
+                    supported_ptx_archs.append("101")
                 # else: no Thor support in older toolkits
 
-    # PTX for newest requested arch (forward-compat)
-    numeric = [a for a in archs if a.isdigit()]
-    if numeric:
-        newest = max(numeric, key=int)
+    # PTX for newest supported arch (forward-compat)
+    if supported_ptx_archs:
+        newest = max(
+            supported_ptx_archs,
+            key=lambda arch: int("".join(ch for ch in arch if ch.isdigit())),
+        )
         cc_flag += ["-gencode", f"arch=compute_{newest},code=compute_{newest}"]
 
     return cc_flag
@@ -380,10 +392,5 @@ setup(
     install_requires=[
         "torch",
         "einops",
-    ],
-    setup_requires=[
-        "packaging",
-        "psutil",
-        "ninja",
     ],
 )

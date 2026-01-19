@@ -1,10 +1,22 @@
 import torch
 import json
+import os
 from block_sparse_attn import block_sparse_attn_func
-from flash_attn import flash_attn_varlen_func
+import torch.nn.functional as F
 from utils import time_fwd, flops, efficiency, write_to_excel
 
-BLOCK_SIZE = 128
+BLOCK_SIZE = int(os.getenv("BLOCK_SPARSE_ATTN_BLOCK_SIZE", "128"))
+
+def measure_peak_memory_mb(func, *args, **kwargs):
+    device = args[0].device if args else torch.device("cuda")
+    torch.cuda.synchronize(device)
+    torch.cuda.reset_peak_memory_stats(device)
+    mem_before = torch.cuda.memory_allocated(device)
+    with torch.no_grad():
+        func(*args, **kwargs)
+    torch.cuda.synchronize(device)
+    peak = torch.cuda.max_memory_allocated(device)
+    return max(0, peak - mem_before) / (1024 ** 2)
 
 def generate_base_sparsity_mask(max_seqlen_q, max_seqlen_k, round_base, m_block_dim, n_block_dim, sparsity, causal=False, device="cuda"):
     def round_to_multiple(x, base):
@@ -58,18 +70,29 @@ def profile_blocksparse_fwd():
     block_sparse_repeats = 3
     device = 'cuda:0'
     dtype = torch.float16
-    causal = True
-    batch_size = 8
+    causal = False
+    batch_size = 200 
     sparsity_sampling_steps = 10
-    seqlen_vals = [1024, 2048, 4096, 8192, 16384, 32768, 65536]
-    headdim = 128
-    dim = 4096
+    seqlen_vals = [1024]
+    headdim = 64 
+    dim = 1024 
     dropout_p = 0.0
     
     nheads = dim // headdim
     excel_dir_path = "./excel/blocksparse/"
     excel_file_name = f"hdim{headdim}_nheads{nheads}_bts{batch_size}_fwd" + ("_causal" if causal else "")
-    excel_label = ["batch_size", "seqlen", "actual_sparsity", "speed", "latency", "speedup", "base_speed", "base_latency"]
+    excel_label = [
+        "batch_size",
+        "seqlen",
+        "actual_sparsity",
+        "speed",
+        "latency",
+        "peak_mem_mb",
+        "speedup",
+        "base_speed",
+        "base_latency",
+        "base_peak_mem_mb",
+    ]
     excel_data = []
     all_results = {}
 
@@ -77,8 +100,8 @@ def profile_blocksparse_fwd():
     
     for seqlen in seqlen_vals:
         print(f"\n{'='*40} SeqLen: {seqlen} {'='*40}")
-        print(f"{'Sparsity':<10} | {'Base Latency':<15} | {'Base TFLOPs':<15} | {'Avg Latency':<15} | {'Avg TFLOPs':<15} | {'Speedup':<10}")
-        print("-" * 95)
+        print(f"{'Sparsity':<10} | {'SDPA Latency':<15} | {'SDPA TFLOPs':<15} | {'SDPA Mem':<12} | {'Avg Latency':<15} | {'Avg TFLOPs':<15} | {'Block Mem':<12} | {'Speedup':<10}")
+        print("-" * 140)
         
         results = {}
         shape = (batch_size * seqlen, nheads, headdim)
@@ -87,19 +110,37 @@ def profile_blocksparse_fwd():
         v = torch.randn(shape, device=device, dtype=dtype)
         cu_seqlens = torch.arange(0, (batch_size + 1) * seqlen, step=seqlen, dtype=torch.int32, device=device)
         
-        # Benchmark Base (Flash Attention)
+        q_sdpa = q.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+        k_sdpa = k.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+        v_sdpa = v.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+
+        # Benchmark Base (Torch SDPA)
         base_f = time_fwd(
-            flash_attn_varlen_func, q, k, v, cu_seqlens, cu_seqlens, 
-            seqlen, seqlen, dropout_p, None, causal, repeats=repeats, verbose=False
+            F.scaled_dot_product_attention,
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
+            dropout_p=dropout_p,
+            is_causal=causal,
+            repeats=repeats,
+            verbose=False,
+        )
+        base_mem_mb = measure_peak_memory_mb(
+            F.scaled_dot_product_attention,
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
+            dropout_p=dropout_p,
+            is_causal=causal,
         )
         base_speed = efficiency(flops(batch_size, seqlen, headdim, nheads, causal, mode="fwd"), base_f)
         
-        results["base"] = [[base_f], [base_speed]]
+        results["base"] = [[base_f], [base_speed], [base_mem_mb]]
         
         sparsity_list = get_sparsity_list(sparsity_sampling_steps, seqlen, causal)
         
         for sparsity in sparsity_list:
-            sum_sparsity, sum_speed, sum_latency = 0, 0, 0
+            sum_sparsity, sum_speed, sum_latency, sum_mem = 0, 0, 0, 0
             
             for _ in range(block_sparse_repeats):
                 # Re-generate mask for each repeat
@@ -113,8 +154,15 @@ def profile_blocksparse_fwd():
                 f = time_fwd(
                     block_sparse_attn_func, q, k, v, cu_seqlens, cu_seqlens, 
                     head_mask_type, None, base_blockmask, seqlen, seqlen, 
-                    dropout_p, is_causal=causal, exact_streaming=False, 
+                    dropout_p, is_causal=causal, exact_streaming=False,
+                    # m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
                     repeats=repeats, verbose=False
+                )
+                mem_mb = measure_peak_memory_mb(
+                    block_sparse_attn_func, q, k, v, cu_seqlens, cu_seqlens, 
+                    head_mask_type, None, base_blockmask, seqlen, seqlen, 
+                    dropout_p, is_causal=causal, exact_streaming=False,
+                    # m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
                 )
                 
                 speed = efficiency(flops(batch_size, seqlen, headdim, nheads, causal, mode="fwd"), f)
@@ -122,28 +170,35 @@ def profile_blocksparse_fwd():
                 sum_sparsity += real_sparsity
                 sum_speed += speed
                 sum_latency += f
+                sum_mem += mem_mb
 
             avg_sparsity = sum_sparsity / block_sparse_repeats
             avg_speed = sum_speed / block_sparse_repeats
             avg_latency = sum_latency / block_sparse_repeats
+            avg_mem_mb = sum_mem / block_sparse_repeats
             speedup = base_f / avg_latency if avg_latency > 0 else 0.0
 
             if avg_sparsity not in results:
-                results[avg_sparsity] = [[], []]
+                results[avg_sparsity] = [[], [], []]
             results[avg_sparsity][0].append(avg_latency)
             results[avg_sparsity][1].append(avg_speed)
+            results[avg_sparsity][2].append(avg_mem_mb)
             
-            excel_data.append([batch_size, seqlen, avg_sparsity, avg_speed, avg_latency, speedup, base_speed, base_f])
+            excel_data.append([batch_size, seqlen, avg_sparsity, avg_speed, avg_latency, avg_mem_mb, speedup, base_speed, base_f, base_mem_mb])
             
-            print(f"{avg_sparsity:<10.4f} | {base_f*1000:>12.2f} ms | {base_speed:>12.2f} | {avg_latency*1000:>12.2f} ms | {avg_speed:>12.2f} | {speedup:>9.2f}x")
+            print(f"{avg_sparsity:<10.4f} | {base_f*1000:>12.2f} ms | {base_speed:>12.2f} | {base_mem_mb:>9.1f} MB | {avg_latency*1000:>12.2f} ms | {avg_speed:>12.2f} | {avg_mem_mb:>9.1f} MB | {speedup:>9.2f}x")
 
         # Summarize results for JSON
         final_results = {}
         for key, val in results.items():
             if key == "base":
-                final_results[key] = [val[0][0], val[1][0]]
+                final_results[key] = [val[0][0], val[1][0], val[2][0]]
             else:
-                final_results[key] = [sum(val[0])/len(val[0]), sum(val[1])/len(val[1])]
+                final_results[key] = [
+                    sum(val[0]) / len(val[0]),
+                    sum(val[1]) / len(val[1]),
+                    sum(val[2]) / len(val[2]),
+                ]
         all_results[seqlen] = final_results
 
     # Save outputs

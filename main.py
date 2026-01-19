@@ -2,29 +2,18 @@ import torch
 import json
 import os
 from block_sparse_attn import block_sparse_attn_func
-from flash_attn import flash_attn_varlen_func
-from utils import time_fwd_bwd, flops, efficiency, write_to_excel
+import torch.nn.functional as F
+from utils import time_fwd, flops, efficiency, write_to_excel
 
 BLOCK_SIZE = int(os.getenv("BLOCK_SPARSE_ATTN_BLOCK_SIZE", "128"))
 
-def measure_peak_memory_mb_fwd_bwd(func, *args, **kwargs):
+def measure_peak_memory_mb(func, *args, **kwargs):
     device = args[0].device if args else torch.device("cuda")
     torch.cuda.synchronize(device)
     torch.cuda.reset_peak_memory_stats(device)
     mem_before = torch.cuda.memory_allocated(device)
-
-    y = func(*args, **kwargs)
-    if isinstance(y, tuple):
-        y = y[0]
-    grad = torch.randn_like(y)
-    for x in args:
-        if isinstance(x, torch.Tensor):
-            x.grad = None
-    y.backward(grad)
-    for x in args:
-        if isinstance(x, torch.Tensor):
-            x.grad = None
-
+    with torch.no_grad():
+        func(*args, **kwargs)
     torch.cuda.synchronize(device)
     peak = torch.cuda.max_memory_allocated(device)
     return max(0, peak - mem_before) / (1024 ** 2)
@@ -44,7 +33,6 @@ def generate_base_sparsity_mask(max_seqlen_q, max_seqlen_k, round_base, m_block_
             if causal:
                 available_col_num = max(0, ncol - i)
                 num_one = max(1, int(density * available_col_num))
-                # Randomly select columns to be active
                 if available_col_num > 0:
                     base_mask[0][idx, torch.randperm(available_col_num)[:num_one]] = True
             else:
@@ -57,18 +45,11 @@ def generate_base_sparsity_mask(max_seqlen_q, max_seqlen_k, round_base, m_block_
     calculated_block_num = base_mask.sum().item()
     total_block_num = 0
     if causal:
-        # Calculate total valid blocks for causal mask
         for i in range(nrow):
              total_block_num += max(0, ncol - i)
     else:
         total_block_num = nrow * ncol
         
-    # Recalculate based on what the loop above actually does for "total" if needed, 
-    # but strictly speaking simple calculation:
-    # The original code logic for total_block_num in causal case inside the loop was:
-    # available_col_num = max(0, ncol - i); total_block_num += available_col_num
-    # This matches the number of valid blocks in the lower triangle.
-    
     real_sparsity = 1.0 - (calculated_block_num / total_block_num) if total_block_num > 0 else 0.0
     return base_mask, real_sparsity
 
@@ -83,23 +64,23 @@ def get_sparsity_list(sampling_steps, seqlen, causal):
             sparsity_list.append(sparse_rate)
     return sparsity_list
 
-def profile_blocksparse_fwd_bwd():
+def profile_blocksparse_fwd():
     # Configuration
-    repeats = 10
-    block_sparse_repeats = 5
+    repeats = 15
+    block_sparse_repeats = 3
     device = 'cuda:0'
     dtype = torch.float16
-    causal = True
-    batch_size = 1
-    sparsity_sampling_steps = 20
-    seqlen_vals = [8192, 16384, 32768]
-    headdim = 128
-    dim = 4096
+    causal = False
+    batch_size = 8 
+    sparsity_sampling_steps = 10
+    seqlen_vals = [4096]
+    headdim = 64 
+    dim = 1024 
     dropout_p = 0.0
     
     nheads = dim // headdim
     excel_dir_path = "./excel/blocksparse/"
-    excel_file_name = f"hdim{headdim}_nheads{nheads}_bts{batch_size}_fwd_bwd" + ("_causal" if causal else "")
+    excel_file_name = f"hdim{headdim}_nheads{nheads}_bts{batch_size}_fwd" + ("_causal" if causal else "")
     excel_label = [
         "batch_size",
         "seqlen",
@@ -119,39 +100,50 @@ def profile_blocksparse_fwd_bwd():
     
     for seqlen in seqlen_vals:
         print(f"\n{'='*40} SeqLen: {seqlen} {'='*40}")
-        print(f"{'Sparsity':<10} | {'Base Latency':<15} | {'Base TFLOPs':<15} | {'Base Mem':<12} | {'Avg Latency':<15} | {'Avg TFLOPs':<15} | {'Block Mem':<12} | {'Speedup':<10}")
+        print(f"{'Sparsity':<10} | {'SDPA Latency':<15} | {'SDPA TFLOPs':<15} | {'SDPA Mem':<12} | {'Avg Latency':<15} | {'Avg TFLOPs':<15} | {'Block Mem':<12} | {'Speedup':<10}")
         print("-" * 140)
         
         results = {}
         shape = (batch_size * seqlen, nheads, headdim)
-        q = torch.randn(shape, device=device, dtype=dtype, requires_grad=True)
-        k = torch.randn(shape, device=device, dtype=dtype, requires_grad=True)
-        v = torch.randn(shape, device=device, dtype=dtype, requires_grad=True)
+        q = torch.randn(shape, device=device, dtype=dtype)
+        k = torch.randn(shape, device=device, dtype=dtype)
+        v = torch.randn(shape, device=device, dtype=dtype)
         cu_seqlens = torch.arange(0, (batch_size + 1) * seqlen, step=seqlen, dtype=torch.int32, device=device)
         
-        # Benchmark Base (Flash Attention)
-        base_f, base_b = time_fwd_bwd(
-            flash_attn_varlen_func, q, k, v, cu_seqlens, cu_seqlens, 
-            seqlen, seqlen, dropout_p, None, causal, repeats=repeats, verbose=False
+        q_sdpa = q.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+        k_sdpa = k.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+        v_sdpa = v.reshape(batch_size, seqlen, nheads, headdim).transpose(1, 2).contiguous()
+
+        # Benchmark Base (Torch SDPA)
+        base_f = time_fwd(
+            F.scaled_dot_product_attention,
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
+            dropout_p=dropout_p,
+            is_causal=causal,
+            repeats=repeats,
+            verbose=False,
         )
-        base_latency = base_f + base_b
-        base_mem_mb = measure_peak_memory_mb_fwd_bwd(
-            flash_attn_varlen_func, q, k, v, cu_seqlens, cu_seqlens,
-            seqlen, seqlen, dropout_p, None, causal
+        base_mem_mb = measure_peak_memory_mb(
+            F.scaled_dot_product_attention,
+            q_sdpa,
+            k_sdpa,
+            v_sdpa,
+            dropout_p=dropout_p,
+            is_causal=causal,
         )
-        base_flops_val = flops(batch_size, seqlen, headdim, nheads, causal, mode="fwd_bwd")
-        base_speed = efficiency(base_flops_val, base_latency)
+        base_speed = efficiency(flops(batch_size, seqlen, headdim, nheads, causal, mode="fwd"), base_f)
         
-        results["base"] = [[base_latency], [base_speed], [base_mem_mb]]
+        results["base"] = [[base_f], [base_speed], [base_mem_mb]]
         
         sparsity_list = get_sparsity_list(sparsity_sampling_steps, seqlen, causal)
         
         for sparsity in sparsity_list:
             sum_sparsity, sum_speed, sum_latency, sum_mem = 0, 0, 0, 0
             
-            # Run multiple repeats for stability
             for _ in range(block_sparse_repeats):
-                # Re-generate mask for each repeat to average over random masks
+                # Re-generate mask for each repeat
                 base_blockmask, real_sparsity = generate_base_sparsity_mask(
                     seqlen, seqlen, BLOCK_SIZE, BLOCK_SIZE, BLOCK_SIZE, 
                     sparsity, causal=causal, device=device
@@ -159,44 +151,42 @@ def profile_blocksparse_fwd_bwd():
                 base_blockmask = base_blockmask.unsqueeze(0).repeat(batch_size, nheads, 1, 1)
                 head_mask_type = torch.tensor([1] * nheads, device=device, dtype=torch.int32)
                 
-                f, b = time_fwd_bwd(
+                f = time_fwd(
                     block_sparse_attn_func, q, k, v, cu_seqlens, cu_seqlens, 
                     head_mask_type, None, base_blockmask, seqlen, seqlen, 
                     dropout_p, is_causal=causal, exact_streaming=False,
-                    m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
+                    # m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
                     repeats=repeats, verbose=False
                 )
-                mem_mb = measure_peak_memory_mb_fwd_bwd(
-                    block_sparse_attn_func, q, k, v, cu_seqlens, cu_seqlens,
-                    head_mask_type, None, base_blockmask, seqlen, seqlen,
+                mem_mb = measure_peak_memory_mb(
+                    block_sparse_attn_func, q, k, v, cu_seqlens, cu_seqlens, 
+                    head_mask_type, None, base_blockmask, seqlen, seqlen, 
                     dropout_p, is_causal=causal, exact_streaming=False,
-                    m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
+                    # m_block_dim=BLOCK_SIZE, n_block_dim=BLOCK_SIZE,
                 )
                 
-                latency = f + b
-                speed = efficiency(base_flops_val, latency)
+                speed = efficiency(flops(batch_size, seqlen, headdim, nheads, causal, mode="fwd"), f)
                 
                 sum_sparsity += real_sparsity
                 sum_speed += speed
-                sum_latency += latency
+                sum_latency += f
                 sum_mem += mem_mb
 
             avg_sparsity = sum_sparsity / block_sparse_repeats
             avg_speed = sum_speed / block_sparse_repeats
             avg_latency = sum_latency / block_sparse_repeats
             avg_mem_mb = sum_mem / block_sparse_repeats
-            speedup = base_latency / avg_latency if avg_latency > 0 else 0.0
+            speedup = base_f / avg_latency if avg_latency > 0 else 0.0
 
-            # Store results
             if avg_sparsity not in results:
                 results[avg_sparsity] = [[], [], []]
             results[avg_sparsity][0].append(avg_latency)
             results[avg_sparsity][1].append(avg_speed)
             results[avg_sparsity][2].append(avg_mem_mb)
             
-            excel_data.append([batch_size, seqlen, avg_sparsity, avg_speed, avg_latency, avg_mem_mb, speedup, base_speed, base_latency, base_mem_mb])
+            excel_data.append([batch_size, seqlen, avg_sparsity, avg_speed, avg_latency, avg_mem_mb, speedup, base_speed, base_f, base_mem_mb])
             
-            print(f"{avg_sparsity:<10.4f} | {base_latency*1000:>12.2f} ms | {base_speed:>12.2f} | {base_mem_mb:>9.1f} MB | {avg_latency*1000:>12.2f} ms | {avg_speed:>12.2f} | {avg_mem_mb:>9.1f} MB | {speedup:>9.2f}x")
+            print(f"{avg_sparsity:<10.4f} | {base_f*1000:>12.2f} ms | {base_speed:>12.2f} | {base_mem_mb:>9.1f} MB | {avg_latency*1000:>12.2f} ms | {avg_speed:>12.2f} | {avg_mem_mb:>9.1f} MB | {speedup:>9.2f}x")
 
         # Summarize results for JSON
         final_results = {}
@@ -219,4 +209,4 @@ def profile_blocksparse_fwd_bwd():
     print(f"\nResults saved to {excel_dir_path}{excel_file_name}.xlsx and all_results_{excel_file_name}.json")
 
 if __name__ == "__main__":
-    profile_blocksparse_fwd_bwd()
+    profile_blocksparse_fwd()
