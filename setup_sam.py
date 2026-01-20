@@ -153,7 +153,12 @@ if not SKIP_CUDA_BUILD:
         # Forward only, non-causal only
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim64_fp16.cu",
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim64_bf16.cu",
+        "csrc/block_sparse_attn/src/flash_fwd_sam_hdim32_fp16.cu",
+        "csrc/block_sparse_attn/src/flash_fwd_sam_hdim32_bf16.cu",
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim128_fp16.cu",
+        "csrc/block_sparse_attn/src/flash_fwd_sam_hdim128_bf16.cu",
+        "csrc/block_sparse_attn/src/flash_fwd_sam_hdim256_fp16.cu",
+        "csrc/block_sparse_attn/src/flash_fwd_sam_hdim256_bf16.cu",
     ]
 
     # Get PyTorch library path for RPATH embedding

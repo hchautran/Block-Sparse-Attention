@@ -51,7 +51,7 @@ def example_1_simple_interface():
     print(f"  Device: {device}")
 
     if device == 'cpu':
-        print("\n⚠️  Warning: CUDA not available. This example requires a GPU.")
+        print("\n⚠ Warning: CUDA not available. This example requires a GPU.")
         return
 
     # Create Q, K, V tensors in standard format (batch, seqlen, heads, dim)
@@ -87,7 +87,7 @@ def example_1_simple_interface():
     )
 
     print(f"\nOutput shape: {output.shape}")
-    print("✅ Success! Output matches input shape.")
+    print("Success! Output matches input shape.")
 
     # Split into image and prompt outputs
     image_output = output[:, :num_image_tokens]
@@ -113,7 +113,7 @@ def example_2_advanced_interface():
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
-        print("\n⚠️  Warning: CUDA not available. Skipping.")
+        print("\n Warning: CUDA not available. Skipping.")
         return
 
     dtype = torch.float16
@@ -168,62 +168,61 @@ def example_2_advanced_interface():
     output = output.reshape(batch_size, num_tokens, num_heads, head_dim)
 
     print(f"\nOutput shape: {output.shape}")
-    print("✅ Success!")
+    print("Success!")
 
 
-def example_3_different_masks():
-    """Example 3: Different mask patterns"""
+def example_3_correctness():
+    """Example 3: Correctness check vs dense attention"""
     print("\n" + "="*70)
-    print("Example 3: Different Mask Patterns")
+    print("Example 3: Correctness Check (Dense vs Block Sparse)")
     print("="*70)
-
-    from examples.sam_masks import (
-        generate_sam_hierarchical_mask,
-        generate_sam_hybrid_encoder_mask
-    )
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     if device == 'cpu':
-        print("\n⚠️  Warning: CUDA not available. Skipping.")
+        print("\n⚠ Warning: CUDA not available. Skipping.")
         return
 
-    num_image_tokens = 1024
-    num_prompt_tokens = 5
-    total_tokens = num_image_tokens + num_prompt_tokens
+    import torch.nn.functional as F
+
     batch_size = 2
-    num_heads = 12
+    seq_len = 256
+    num_heads = 8
     head_dim = 64
     block_size = 128
+    dtype = torch.float16
 
-    q = torch.randn(batch_size, total_tokens, num_heads, head_dim,
-                    device=device, dtype=torch.float16)
+    q = torch.randn(batch_size, seq_len, num_heads, head_dim,
+                    device=device, dtype=dtype)
     k = torch.randn_like(q)
     v = torch.randn_like(q)
 
-    # Pattern 1: Hierarchical (different scales per head)
-    print("\n1. Hierarchical Mask (multi-scale)")
-    mask = generate_sam_hierarchical_mask(
-        num_image_tokens, num_prompt_tokens, block_size,
-        batch_size, num_heads, device=device
-    )
-    output = sam_block_sparse_attn_simple(q, k, v, mask)
-    print(f"   Sparsity: {1 - mask.float().mean():.2%}")
-    print(f"   Output shape: {output.shape}")
+    nrow = ncol = (seq_len + block_size - 1) // block_size
+    dense_mask = torch.ones(batch_size, num_heads, nrow, ncol,
+                            device=device, dtype=torch.bool)
 
-    # Pattern 2: Hybrid (some dense, some sparse heads)
-    print("\n2. Hybrid Mask (4 dense + 8 sparse heads)")
-    mask, head_types = generate_sam_hybrid_encoder_mask(
-        num_image_tokens, block_size, batch_size, num_heads,
-        num_dense_heads=4, sparsity=0.7, device=device
-    )
-    # For hybrid, we only pass the sparse mask
-    output = sam_block_sparse_attn_simple(q[:, :num_image_tokens],
-                                         k[:, :num_image_tokens],
-                                         v[:, :num_image_tokens],
-                                         mask, head_types)
-    print(f"   Head types: {head_types}")
-    print(f"   Sparse heads sparsity: {1 - mask.float().mean():.2%}")
-    print(f"   Output shape: {output.shape}")
+    # Block-sparse path using a dense mask (all blocks enabled)
+    out_sparse = sam_block_sparse_attn_simple(q, k, v, dense_mask)
+
+    # Dense baseline using PyTorch SDPA (b, h, t, d)
+    q_t = q.transpose(1, 2)
+    k_t = k.transpose(1, 2)
+    v_t = v.transpose(1, 2)
+    out_dense = F.scaled_dot_product_attention(
+        q_t, k_t, v_t, attn_mask=None, dropout_p=0.0, is_causal=False
+    ).transpose(1, 2)
+
+    diff = (out_sparse - out_dense).abs()
+    max_abs = diff.max().item()
+    mean_abs = diff.mean().item()
+    print(f"\nMax abs diff: {max_abs:.3e}")
+    print(f"Mean abs diff: {mean_abs:.3e}")
+
+    try:
+        torch.testing.assert_close(out_sparse, out_dense, rtol=1e-2, atol=1e-2)
+        print("✅ Correctness check passed.")
+    except AssertionError as exc:
+        print("❌ Correctness check failed.")
+        print(str(exc))
 
 
 def example_4_performance():
@@ -238,10 +237,11 @@ def example_4_performance():
         return
 
     import time
+    import torch.nn.functional as F
 
     seq_len = 4096
-    batch_size = 8
-    num_heads = 12
+    batch_size = 16 
+    num_heads = 16
     head_dim = 64
     block_size = 128
 
@@ -257,6 +257,22 @@ def example_4_performance():
 
     nrow = ncol = (seq_len + block_size - 1) // block_size
 
+    # SDPA baseline (dense)
+    print("\n0. Dense Attention (PyTorch SDPA baseline)")
+    q_t = q.transpose(1, 2)
+    k_t = k.transpose(1, 2)
+    v_t = v.transpose(1, 2)
+
+    torch.cuda.synchronize()
+    start = time.time()
+    for _ in range(100):
+        _ = F.scaled_dot_product_attention(
+            q_t, k_t, v_t, attn_mask=None, dropout_p=0.0, is_causal=False
+        )
+    torch.cuda.synchronize()
+    sdpa_time = (time.time() - start) / 100
+    print(f"   Time: {sdpa_time*1000:.2f} ms")
+
     # Dense attention (0% sparsity)
     print("\n1. Dense Attention (0% sparsity)")
     dense_mask = torch.ones(batch_size, num_heads, nrow, ncol,
@@ -269,6 +285,7 @@ def example_4_performance():
     torch.cuda.synchronize()
     dense_time = (time.time() - start) / 100
     print(f"   Time: {dense_time*1000:.2f} ms")
+    print(f"   Speedup vs SDPA: {sdpa_time/dense_time:.2f}x")
 
     # 50% sparse
     print("\n2. Sparse Attention (50% sparsity)")
@@ -287,7 +304,8 @@ def example_4_performance():
     torch.cuda.synchronize()
     sparse_time = (time.time() - start) / 100
     print(f"   Time: {sparse_time*1000:.2f} ms")
-    print(f"   Speedup: {dense_time/sparse_time:.2f}x")
+    print(f"   Speedup vs dense mask: {dense_time/sparse_time:.2f}x")
+    print(f"   Speedup vs SDPA: {sdpa_time/sparse_time:.2f}x")
 
     # 75% sparse
     print("\n3. Very Sparse Attention (75% sparsity)")
@@ -306,7 +324,8 @@ def example_4_performance():
     torch.cuda.synchronize()
     very_sparse_time = (time.time() - start) / 100
     print(f"   Time: {very_sparse_time*1000:.2f} ms")
-    print(f"   Speedup: {dense_time/very_sparse_time:.2f}x")
+    print(f"   Speedup vs dense mask: {dense_time/very_sparse_time:.2f}x")
+    print(f"   Speedup vs SDPA: {sdpa_time/very_sparse_time:.2f}x")
 
 
 if __name__ == "__main__":
@@ -316,7 +335,7 @@ if __name__ == "__main__":
 
     example_1_simple_interface()
     example_2_advanced_interface()
-    example_3_different_masks()
+    example_3_correctness()
     example_4_performance()
 
     print("\n" + "="*70)
