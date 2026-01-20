@@ -81,6 +81,11 @@ void set_params_sam_fprop(
     params.cu_seqlens_q = static_cast<int *>(cu_seqlens_q_d);
     params.cu_seqlens_k = static_cast<int *>(cu_seqlens_k_d);
 
+    // KV-cache not used for SAM (set to nullptr/0)
+    params.seqused_k = nullptr;
+    params.knew_ptr = nullptr;
+    params.seqlen_knew = 0;
+
     params.softmax_lse_ptr = softmax_lse_d;
 
     // Set dimensions

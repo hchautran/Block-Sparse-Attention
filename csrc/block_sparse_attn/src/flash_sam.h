@@ -74,6 +74,12 @@ struct Flash_fwd_sam_params {
     int *__restrict__ cu_seqlens_q;
     int *__restrict__ cu_seqlens_k;
 
+    // KV-cache related (not used for SAM, but needed by BlockInfo)
+    // Set these to nullptr/0 in SAM usage
+    int *__restrict__ seqused_k;     // Actual used length of each K sequence (nullptr for SAM)
+    void *__restrict__ knew_ptr;     // New K values for cache append (nullptr for SAM)
+    int seqlen_knew;                 // Length of new K (0 for SAM)
+
     // ============================================================================
     // Block-sparse attention specific
     // ============================================================================
