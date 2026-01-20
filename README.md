@@ -1,8 +1,17 @@
 # Block Sparse Attention
 
-As prompt lengths continue to increase, the computational and memory bandwidth demands of Large Language Models (LLMs) grow significantly, making efficient processing more challenging. However, by fully leveraging the inherent sparsity in attention patterns, we can optimize the model’s performance, effectively reducing inference costs in computation. This approach not only enhances the efficiency of LLMs but also enables them to handle longer and more complex prompts without a proportional increase in resource consumption. To this end, we introduce Block Sparse Attention, a library of sparse attention kernels that supports various sparse patterns, including streaming attention with token granularity, streaming attention with block granularity, and block-sparse attention. By incorporating these patterns, Block Sparse Attention can significantly reduce the computational costs of LLMs, thereby enhancing their efficiency and scalability.
+Block Sparse Attention is a high-performance library for efficient sparse attention computation, designed for **Vision Transformers (ViT)** and **Segment Anything Model (SAM)**. By exploiting sparsity in attention patterns, this library significantly reduces computational costs while maintaining model quality.
 
-We release the implementation of Block Sparse Attention, which is initially modified base on [FlashAttention](https://github.com/Dao-AILab/flash-attention) 2.4.2.
+Originally developed for Large Language Models (LLMs), we provide a focused implementation optimized for vision models. The library supports various sparse patterns including block-sparse attention, streaming attention, and hybrid dense-sparse patterns.
+
+**Key Features for Vision Models:**
+- ✨ **Ready-to-use mask generators** for ViT and SAM
+- 🚀 **Significant speedup** (1.5-3x) with 40-70% sparsity
+- 🎯 **Vision-optimized patterns**: spatial locality, multi-scale attention, prompt-aware masking
+- 🔧 **Flexible configuration**: per-head pattern control, hybrid dense-sparse attention
+- 📦 **Complete examples** in the `examples/` directory
+
+We release the implementation of Block Sparse Attention, which is initially modified based on [FlashAttention](https://github.com/Dao-AILab/flash-attention) 2.4.2.
 
 ![Sparse Patterns](assets/BlockSparseMaskDemo.jpeg)
 
@@ -142,6 +151,63 @@ Block Sparse Attention currently supports:
 
 1. Datatype fp16 and bf16 (bf16 requires Ampere, Ada, or Hopper GPUs).
 2. Head dimension 32, 64, 128.
+
+## Quick Start for Vision Models
+
+### Vision Transformer (ViT)
+
+```python
+from block_sparse_attn import block_sparse_attn_func
+from examples.vit_masks import generate_vit_spatial_locality_mask
+
+# Generate spatial locality mask for ViT-B/16
+base_blockmask = generate_vit_spatial_locality_mask(
+    img_size=224,          # Image size
+    patch_size=16,         # ViT-B/16 patch size
+    block_size=128,        # Block size for sparse attention
+    batch_size=4,
+    num_heads=12,
+    locality_radius=1,     # Attend to immediate neighbors
+    include_cls_token=True,
+    device="cuda"
+)
+
+# Prepare Q, K, V tensors (in varlen format)
+# See examples/usage_example.py for complete code
+output = block_sparse_attn_func(
+    q_unpad, k_unpad, v_unpad,
+    cu_seqlens_q, cu_seqlens_k,
+    head_mask_type,
+    streaming_info=None,
+    base_blockmask=base_blockmask,
+    max_seqlen_q_=num_tokens,
+    max_seqlen_k_=num_tokens,
+    p_dropout=0.0,
+    is_causal=False,
+)
+```
+
+### Segment Anything Model (SAM)
+
+```python
+from examples.sam_masks import generate_sam_image_to_prompt_mask
+
+# Generate mask where image tokens attend to prompts
+base_blockmask = generate_sam_image_to_prompt_mask(
+    num_image_tokens=4096,      # 64x64 patches for SAM-B
+    num_prompt_tokens=5,        # Point and box prompts
+    block_size=128,
+    batch_size=2,
+    num_heads=12,
+    sparse_image_to_image=True, # Sparse for image-to-image
+    image_sparsity=0.6,         # 60% sparsity
+    device="cuda"
+)
+
+# Use with block_sparse_attn_func (same as above)
+```
+
+**See [`examples/`](examples/) directory for complete working examples!**
 
 ### Tests
 
