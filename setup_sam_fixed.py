@@ -1,16 +1,7 @@
 """
-SAM-Only Block Sparse Attention Setup
+SAM-Only Block Sparse Attention Setup (with fixed linking)
 
-This is a simplified setup file that only compiles the SAM-specific kernels.
-Compared to the full setup.py, this:
-- Only compiles forward pass (no backward)
-- Only compiles non-causal kernels (SAM is bidirectional)
-- Only compiles 3 kernel files instead of 24
-- Compiles 10x faster (~1-2 min vs 10-15 min)
-- Produces 10x smaller binary (~20MB vs 200MB)
-
-Usage:
-    pip install -e . -f setup_sam.py
+This version ensures proper linking to PyTorch libraries by embedding RPATH.
 """
 
 import sys
@@ -19,7 +10,6 @@ import warnings
 import os
 from pathlib import Path
 from packaging.version import parse, Version
-import platform
 
 from setuptools import setup, find_packages
 import subprocess
@@ -59,17 +49,14 @@ def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
     """Add -gencode flags for requested architectures."""
     supported_ptx_archs = []
 
-    # Ampere (sm80)
     if "80" in archs:
         cc_flag += ["-gencode", "arch=compute_80,code=sm_80"]
         supported_ptx_archs.append("80")
 
-    # Hopper (sm90) - requires CUDA >= 11.8
     if bare_metal_version >= Version("11.8") and "90" in archs:
         cc_flag += ["-gencode", "arch=compute_90,code=sm_90"]
         supported_ptx_archs.append("90")
 
-    # Blackwell (sm100) - requires CUDA >= 12.8
     if bare_metal_version >= Version("12.8") and "100" in archs:
         if bare_metal_version >= Version("12.9"):
             cc_flag += ["-gencode", "arch=compute_100f,code=sm_100"]
@@ -78,7 +65,6 @@ def add_cuda_gencodes(cc_flag, archs, bare_metal_version):
             cc_flag += ["-gencode", "arch=compute_100,code=sm_100"]
             supported_ptx_archs.append("100")
 
-    # PTX for forward compatibility
     if supported_ptx_archs:
         newest = max(
             supported_ptx_archs,
@@ -106,7 +92,6 @@ def append_nvcc_threads(nvcc_extra_args):
 cmdclass = {}
 ext_modules = []
 
-# Initialize cutlass submodule
 subprocess.run(["git", "submodule", "update", "--init", "csrc/cutlass"], check=False)
 
 if not SKIP_CUDA_BUILD:
@@ -147,10 +132,8 @@ if not SKIP_CUDA_BUILD:
         nvcc_flags.extend(["-Xcompiler", "/Zc:__cplusplus"])
         compiler_c17_flag = ["-O2", "/std:c++17", "/Zc:__cplusplus"]
 
-    # SAM-only kernel files (only 3 files instead of 24!)
     sam_sources = [
         "csrc/block_sparse_attn/flash_api_sam.cpp",
-        # Forward only, non-causal only
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim64_fp16.cu",
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim64_bf16.cu",
         "csrc/block_sparse_attn/src/flash_fwd_sam_hdim128_fp16.cu",
