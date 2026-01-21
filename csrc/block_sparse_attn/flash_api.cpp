@@ -134,6 +134,7 @@ mha_varlen_fwd(
     const at::Tensor &cu_seqlens_k,      // b+1
     const at::Tensor &head_mask_type,    // num_heads
     std::optional<at::Tensor> &row_blockmask_,  // batch, num_sparse_heads, nrow, ncol
+    std::optional<at::Tensor> &positional_,     // batch, num_heads, seqlen_q, seqlen_k
     int max_seqlen_q,
     const int max_seqlen_k,
     const float softmax_scale
@@ -152,6 +153,11 @@ mha_varlen_fwd(
     if (has_blockmask) {
         row_blockmask = row_blockmask_.value();
     }
+    const bool has_positional = positional_.has_value();
+    at::Tensor positional;
+    if (has_positional) {
+        positional = positional_.value();
+    }
 
     // Check dtypes
     auto q_dtype = q.dtype();
@@ -166,6 +172,9 @@ mha_varlen_fwd(
     if (has_blockmask) {
         TORCH_CHECK(row_blockmask.dtype() == torch::kInt32, "row_blockmask must be int32");
     }
+    if (has_positional) {
+        TORCH_CHECK(positional.dtype() == q_dtype, "positional must have the same dtype as q");
+    }
 
     // Check device placement
     CHECK_DEVICE(q); CHECK_DEVICE(k); CHECK_DEVICE(v);
@@ -174,6 +183,9 @@ mha_varlen_fwd(
     CHECK_DEVICE(head_mask_type);
     if (has_blockmask) {
         CHECK_DEVICE(row_blockmask);
+    }
+    if (has_positional) {
+        CHECK_DEVICE(positional);
     }
 
     // Check contiguity
@@ -185,6 +197,9 @@ mha_varlen_fwd(
     CHECK_CONTIGUOUS(head_mask_type);
     if (has_blockmask) {
         CHECK_CONTIGUOUS(row_blockmask);
+    }
+    if (has_positional) {
+        TORCH_CHECK(positional.stride(-1) == 1, "positional must have contiguous last dimension");
     }
 
     // Extract dimensions
@@ -225,6 +240,9 @@ mha_varlen_fwd(
         CHECK_SHAPE(row_blockmask, batch_size, num_blocksparse_heads,
                     seqlen_q_rounded / SPARSE_SIZE, seqlen_k_rounded / SPARSE_SIZE);
     }
+    if (has_positional) {
+        CHECK_SHAPE(positional, batch_size, num_heads, max_seqlen_q, max_seqlen_k);
+    }
 
     // Create softmax LSE tensor
     auto opts = q.options();
@@ -256,6 +274,19 @@ mha_varlen_fwd(
         params.num_blocksparse_heads = num_blocksparse_heads;
     } else {
         params.blockmask = nullptr;
+    }
+    if (has_positional) {
+        params.pos_ptr = positional.data_ptr();
+        params.pos_batch_stride = positional.stride(0);
+        params.pos_head_stride = positional.stride(1);
+        params.pos_row_stride = positional.stride(2);
+        params.pos_col_stride = positional.stride(3);
+    } else {
+        params.pos_ptr = nullptr;
+        params.pos_batch_stride = 0;
+        params.pos_head_stride = 0;
+        params.pos_row_stride = 0;
+        params.pos_col_stride = 0;
     }
 
     // Run kernel

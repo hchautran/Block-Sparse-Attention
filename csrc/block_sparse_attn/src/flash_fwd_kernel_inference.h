@@ -102,6 +102,51 @@ inline __device__ void softmax_rescale_o_sam(
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+// Optional positional bias add (elementwise) before softmax
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<typename ElementAccum, typename Element, typename index_t, typename Params, typename TensorScores>
+inline __device__ void add_positional_bias(
+    const Params &params,
+    int bidb,
+    int bidh,
+    int m_block,
+    int n_block,
+    int kBlockM,
+    int kBlockN,
+    TensorScores &scores
+) {
+    if (params.pos_ptr == nullptr) {
+        return;
+    }
+    const Element *pos_ptr = reinterpret_cast<const Element *>(params.pos_ptr);
+    const index_t base = params.pos_batch_stride * bidb + params.pos_head_stride * bidh;
+    const index_t row_base = params.pos_row_stride * (m_block * kBlockM);
+    const index_t col_base = params.pos_col_stride * (n_block * kBlockN);
+
+    #pragma unroll
+    for (int mi = 0; mi < size<0>(scores); ++mi) {
+        const index_t row_offset = row_base + mi * params.pos_row_stride;
+        #pragma unroll
+        for (int ni = 0; ni < size<1>(scores); ++ni) {
+            const index_t pos_idx = base + row_offset + col_base + ni * params.pos_col_stride;
+            scores(mi, ni) += static_cast<ElementAccum>(pos_ptr[pos_idx]);
+        }
+    }
+}
+
+template<typename ElementAccum, typename TensorScores>
+inline __device__ void scale_scores(TensorScores &scores, float scale) {
+    #pragma unroll
+    for (int mi = 0; mi < size<0>(scores); ++mi) {
+        #pragma unroll
+        for (int ni = 0; ni < size<1>(scores); ++ni) {
+            scores(mi, ni) = static_cast<ElementAccum>(scores(mi, ni) * scale);
+        }
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Main vision transformers block-sparse attention kernel
 //
 // Template parameters:
@@ -351,6 +396,7 @@ inline __device__ void compute_block_attn_sam(
 
             // Scores are all masked, apply mask with 0 valid elements
             Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout()));
+            scale_scores<ElementAccum>(scores, params.scale_softmax);
             FLASH_NAMESPACE::apply_mask(scores, 0);
 
             FLASH_NAMESPACE::cp_async_wait<0>();
@@ -363,9 +409,10 @@ inline __device__ void compute_block_attn_sam(
             }
 
             // Update softmax statistics with empty block
+            const float softmax_scale_log2 = M_LOG2E;
             masking_step == 0
-                ? softmax_rescale_o_sam</*Is_first=*/true>(scores, scores_max, scores_sum, acc_o, params.scale_softmax_log2, /*Is_blocksparse_skip=*/true)
-                : softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, params.scale_softmax_log2, /*Is_blocksparse_skip=*/true);
+                ? softmax_rescale_o_sam</*Is_first=*/true>(scores, scores_max, scores_sum, acc_o, softmax_scale_log2, /*Is_blocksparse_skip=*/true)
+                : softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, softmax_scale_log2, /*Is_blocksparse_skip=*/true);
 
             if (n_masking_steps > 1 && n_block <= n_block_min) {
                 --n_block;
@@ -407,6 +454,11 @@ inline __device__ void compute_block_attn_sam(
 
             Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout()));
 
+            scale_scores<ElementAccum>(scores, params.scale_softmax);
+            add_positional_bias<ElementAccum, Element, index_t>(
+                params, bidb, bidh, m_block, n_block, kBlockM, kBlockN, scores
+            );
+
             // Apply masking for OOB elements (Vision transformers is non-causal, non-local)
             if (!Is_even_MN) {
                 FLASH_NAMESPACE::apply_mask(scores, binfo.actual_seqlen_k - n_block * kBlockN);
@@ -422,9 +474,10 @@ inline __device__ void compute_block_attn_sam(
             }
 
             // Compute softmax and rescale previous O
+            const float softmax_scale_log2 = M_LOG2E;
             masking_step == 0
-                ? softmax_rescale_o_sam</*Is_first=*/true>(scores, scores_max, scores_sum, acc_o, params.scale_softmax_log2, /*Is_blocksparse_skip=*/false)
-                : softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, params.scale_softmax_log2, /*Is_blocksparse_skip=*/false);
+                ? softmax_rescale_o_sam</*Is_first=*/true>(scores, scores_max, scores_sum, acc_o, softmax_scale_log2, /*Is_blocksparse_skip=*/false)
+                : softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, softmax_scale_log2, /*Is_blocksparse_skip=*/false);
 
             // Convert scores to element type (fp16/bf16)
             Tensor rP = FLASH_NAMESPACE::convert_type<Element>(scores);
@@ -483,7 +536,11 @@ inline __device__ void compute_block_attn_sam(
 
         // Reshape and compute softmax
         Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout()));
-        softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, params.scale_softmax_log2, /*Is_blocksparse_skip=*/false);
+        scale_scores<ElementAccum>(scores, params.scale_softmax);
+        add_positional_bias<ElementAccum, Element, index_t>(
+            params, bidb, bidh, m_block, n_block, kBlockM, kBlockN, scores
+        );
+        softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, M_LOG2E, /*Is_blocksparse_skip=*/false);
 
         // Convert scores to element type and compute O = P @ V
         Tensor rP = FLASH_NAMESPACE::convert_type<Element>(scores);
@@ -501,7 +558,7 @@ inline __device__ void compute_block_attn_sam(
     for (int mi = 0; mi < size<0>(acc_o_rowcol); ++mi) {
         float sum = scores_sum(mi);
         float inv_sum = (sum == 0.f || sum != sum) ? 1.f : 1.f / sum;
-        lse(mi) = (sum == 0.f || sum != sum) ? INFINITY : scores_max(mi) * params.scale_softmax + __logf(sum);
+        lse(mi) = (sum == 0.f || sum != sum) ? INFINITY : scores_max(mi) + __logf(sum);
 
         #pragma unroll
         for (int ni = 0; ni < size<1>(acc_o_rowcol); ++ni) {

@@ -125,7 +125,8 @@ def block_sparse_attn(
     base_blockmask: Optional[torch.Tensor],
     max_seqlen_q: int,
     max_seqlen_k: int,
-    softmax_scale: Optional[float] = None
+    softmax_scale: Optional[float] = None,
+    positional: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     """
     Block sparse attention (inference only).
@@ -141,6 +142,7 @@ def block_sparse_attn(
         max_seqlen_q: Maximum query sequence length
         max_seqlen_k: Maximum key sequence length
         softmax_scale: Softmax scale factor (default: 1/sqrt(head_dim))
+        positional: Optional attention bias (batch, num_heads, seqlen_q, seqlen_k)
 
     Returns:
         output: Attention output (total_tokens, num_heads, head_dim)
@@ -174,6 +176,7 @@ def block_sparse_attn(
         cu_seqlens_q, cu_seqlens_k,
         head_mask_type_modified,
         row_blockmask,
+        positional,
         max_seqlen_q, max_seqlen_k,
         softmax_scale
     )
@@ -187,7 +190,8 @@ def block_sparse_attn_simple(
     v: torch.Tensor,
     base_blockmask: Optional[torch.Tensor],
     head_mask_type: Optional[torch.Tensor] = None,
-    softmax_scale: Optional[float] = None
+    softmax_scale: Optional[float] = None,
+    positional: Optional[torch.Tensor] = None
 ) -> torch.Tensor:
     """
     Simplified interface that automatically handles varlen conversion.
@@ -197,6 +201,7 @@ def block_sparse_attn_simple(
         base_blockmask: Block sparse mask (batch, num_heads, nrow, ncol) or None for dense
         head_mask_type: Per-head mask type (num_heads,) - optional, auto-generated if None
         softmax_scale: Softmax scale factor (default: 1/sqrt(head_dim))
+        positional: Optional attention bias (batch, num_heads, seqlen_q, seqlen_k)
 
     Returns:
         output: (batch_size, seqlen, num_heads, head_dim)
@@ -224,7 +229,8 @@ def block_sparse_attn_simple(
         head_mask_type,
         base_blockmask,
         max_seqlen, max_seqlen,
-        softmax_scale
+        softmax_scale,
+        positional
     )
 
     # Reshape back to (batch, seqlen, heads, dim)

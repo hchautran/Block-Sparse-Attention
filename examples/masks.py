@@ -18,7 +18,7 @@ def round_to_multiple(x, base):
     return ((x + base - 1) // base) * base
 
 
-def generate_sam_image_to_prompt_mask(
+def generate_image_to_prompt_mask(
     num_image_tokens,
     num_prompt_tokens,
     block_size,
@@ -114,7 +114,7 @@ def generate_sam_image_to_prompt_mask(
     return base_blockmask
 
 
-def generate_sam_hierarchical_mask(
+def generate_hierarchical_mask(
     num_image_tokens,
     num_prompt_tokens,
     block_size,
@@ -190,7 +190,7 @@ def generate_sam_hierarchical_mask(
     return base_mask
 
 
-def generate_sam_region_focused_mask(
+def generate_region_focused_mask(
     num_image_tokens,
     num_prompt_tokens,
     prompt_positions,
@@ -285,7 +285,7 @@ def generate_sam_region_focused_mask(
     return base_blockmask
 
 
-def generate_sam_hybrid_encoder_mask(
+def generate_hybrid_encoder_mask(
     num_image_tokens,
     block_size,
     batch_size,
@@ -338,7 +338,7 @@ def generate_sam_hybrid_encoder_mask(
     return base_mask, head_mask_type
 
 
-def generate_sam_cross_attention_mask(
+def generate_cross_attention_mask(
     num_decoder_tokens,
     num_encoder_tokens,
     block_size,
@@ -397,7 +397,7 @@ if __name__ == "__main__":
 
     # Example 1: Image-to-Prompt mask
     print("1. Image-to-Prompt Mask (sparse image-to-image)")
-    mask = generate_sam_image_to_prompt_mask(
+    mask = generate_image_to_prompt_mask(
         num_image_tokens, num_prompt_tokens, block_size, batch_size, num_heads,
         sparse_image_to_image=True, image_sparsity=0.6
     )
@@ -407,7 +407,7 @@ if __name__ == "__main__":
 
     # Example 2: Hierarchical mask
     print("2. Hierarchical Mask (different scales per head)")
-    mask = generate_sam_hierarchical_mask(
+    mask = generate_hierarchical_mask(
         num_image_tokens, num_prompt_tokens, block_size, batch_size, num_heads
     )
     print(f"   Shape: {mask.shape}")
@@ -420,7 +420,7 @@ if __name__ == "__main__":
     print("3. Region-Focused Mask (dense around prompts)")
     # Example: prompts at positions (32, 32) and (48, 48) in 64x64 grid
     prompt_positions = [(32, 32), (48, 48)]
-    mask = generate_sam_region_focused_mask(
+    mask = generate_region_focused_mask(
         num_image_tokens, num_prompt_tokens, prompt_positions,
         block_size, batch_size, num_heads, focus_radius=8
     )
@@ -430,7 +430,7 @@ if __name__ == "__main__":
 
     # Example 4: Hybrid encoder (pre-prompt stage)
     print("4. Hybrid Encoder Mask (4 dense + 8 sparse heads)")
-    mask, head_types = generate_sam_hybrid_encoder_mask(
+    mask, head_types = generate_hybrid_encoder_mask(
         num_image_tokens, block_size, batch_size, num_heads,
         num_dense_heads=4, sparsity=0.6
     )
@@ -441,7 +441,7 @@ if __name__ == "__main__":
     # Example 5: Cross-attention mask
     print("5. Cross-Attention Mask (decoder to encoder)")
     num_decoder_tokens = 256  # Mask decoder tokens
-    mask = generate_sam_cross_attention_mask(
+    mask = generate_cross_attention_mask(
         num_decoder_tokens, num_image_tokens, block_size, batch_size, num_heads,
         encoder_sparsity=0.5
     )

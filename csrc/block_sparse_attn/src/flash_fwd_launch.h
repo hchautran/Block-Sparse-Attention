@@ -80,14 +80,14 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename T>
-void run_mha_fwd_sam_hdim32(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_hdim32(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 32;
     // SAM doesn't use head_dim=32, but included for completeness
     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>>(params, stream);
 }
 
 template<typename T>
-void run_mha_fwd_sam_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 64;
     // SAM-B uses head_dim=64
     // Block config: 128x128 (optimized for A100/H100)
@@ -95,7 +95,7 @@ void run_mha_fwd_sam_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
 }
 
 template<typename T>
-void run_mha_fwd_sam_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 128;
 
     // Detect GPU architecture
@@ -112,7 +112,7 @@ void run_mha_fwd_sam_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
 }
 
 template<typename T>
-void run_mha_fwd_sam_hdim256(Flash_fwd_params &params, cudaStream_t stream) {
+void run_mha_fwd_hdim256(Flash_fwd_params &params, cudaStream_t stream) {
     constexpr static int Headdim = 256;
     // Larger head dimension: use smaller N blocks
     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>>(params, stream);

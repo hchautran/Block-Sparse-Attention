@@ -91,6 +91,16 @@ struct Flash_fwd_params {
     int num_blocksparse_heads;      // Number of heads using sparse pattern
 
     // ============================================================================
+    // Optional positional matrix (added to attention scores before softmax)
+    // Layout expected: [b, h, seqlen_q, seqlen_k]
+    // ============================================================================
+    void *__restrict__ pos_ptr;
+    index_t pos_batch_stride;
+    index_t pos_head_stride;
+    index_t pos_row_stride;
+    index_t pos_col_stride;
+
+    // ============================================================================
     // Scaling factors
     // ============================================================================
     float scale_softmax;        // 1 / sqrt(d)
