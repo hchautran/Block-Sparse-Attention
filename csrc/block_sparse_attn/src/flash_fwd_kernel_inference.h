@@ -113,7 +113,10 @@ inline __device__ void scale_scores(TensorScores &scores, float scale) {
     for (int mi = 0; mi < size<0>(scores); ++mi) {
         #pragma unroll
         for (int ni = 0; ni < size<1>(scores); ++ni) {
-            scores(mi, ni) = static_cast<ElementAccum>(scores(mi, ni) * scale);
+            #pragma unroll
+            for (int ki = 0; ki < size<2>(scores); ++ki) {
+                scores(mi, ni, ki) = static_cast<ElementAccum>(scores(mi, ni, ki) * scale);
+            }
         }
     }
 }
@@ -128,6 +131,85 @@ inline __device__ void scale_scores(TensorScores &scores, float scale) {
 //   - Params: Parameter struct containing all kernel arguments
 //
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<typename Kernel_traits, bool Is_even_MN, bool Is_even_K, typename Params>
+inline __device__ auto load_pos(
+    const Params &params, const int bidb, const int bidh, const int m_block, const int n_block
+) {
+    using Element = typename Kernel_traits::Element;
+    using index_t = typename Kernel_traits::index_t;
+    constexpr int kBlockM = Kernel_traits::kBlockM;
+    constexpr int kBlockN = Kernel_traits::kBlockN;
+    const int tidx = threadIdx.x;
+
+    const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb);
+    const index_t row_offset_pos = binfo.q_offset(params.pos_batch_stride, params.pos_row_stride, bidb)
+        + bidh * params.pos_head_stride
+        + m_block * kBlockM * params.pos_row_stride
+        + n_block * kBlockN * params.pos_col_stride;
+
+    Tensor gP = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.pos_ptr) + row_offset_pos),
+                            Shape<Int<kBlockM>, Int<kBlockN>>{},
+                            make_stride(params.pos_row_stride, params.pos_col_stride));
+
+ 
+    return gP;
+
+}
+
+template<typename ElementAccum, typename TensorScores, typename TensorPos>
+inline __device__ void add_pos_bias(TensorScores &scores, TensorPos const &pos) {
+    #pragma unroll
+    for (int mi = 0; mi < size<0>(scores); ++mi) {
+        #pragma unroll
+        for (int ni = 0; ni < size<1>(scores); ++ni) {
+            scores(mi, ni) += static_cast<ElementAccum>(pos(mi, ni));
+        }
+    }
+}
+
+template<typename Kernel_traits, bool Is_even_MN, typename Params,
+         typename BlockInfoT, typename TensorScores, typename GmemTiledCopyP, typename GmemThrCopyP>
+inline __device__ void store_attn_block(
+    const Params &params, const BlockInfoT &binfo,
+    const GmemTiledCopyP &gmem_tiled_copy_P, const GmemThrCopyP &gmem_thr_copy_P,
+    const TensorScores &scores, const int bidb, const int bidh, const int m_block, const int n_block
+) {
+    if (params.attn_ptr == nullptr) return;
+
+    using Element = typename Kernel_traits::Element;
+    using index_t = typename Kernel_traits::index_t;
+    constexpr int kBlockM = Kernel_traits::kBlockM;
+    constexpr int kBlockN = Kernel_traits::kBlockN;
+
+    const index_t row_offset_attn = binfo.q_offset(params.attn_batch_stride, params.attn_row_stride, bidb)
+        + bidh * params.attn_head_stride
+        + m_block * kBlockM * params.attn_row_stride
+        + n_block * kBlockN * params.attn_col_stride;
+
+    Tensor gAttn = make_tensor(make_gmem_ptr(reinterpret_cast<Element *>(params.attn_ptr) + row_offset_attn),
+                               Shape<Int<kBlockM>, Int<kBlockN>>{},
+                               make_stride(params.attn_row_stride, params.attn_col_stride));
+    Tensor tPgAttn = gmem_thr_copy_P.partition_D(gAttn);
+    Tensor rAttn = FLASH_NAMESPACE::convert_type<Element>(scores);
+    Tensor tPrAttn = gmem_thr_copy_P.partition_S(rAttn);
+
+    Tensor cAttn = make_identity_tensor(make_shape(size<0>(gAttn), size<1>(gAttn)));
+    Tensor tPcAttn = gmem_thr_copy_P.partition_D(cAttn);
+    Tensor tPpAttn = make_tensor<bool>(make_shape(size<2>(tPgAttn)));
+
+    if (!Is_even_MN) {
+        const int max_col = binfo.actual_seqlen_k - n_block * kBlockN;
+        #pragma unroll
+        for (int k = 0; k < size(tPpAttn); ++k) {
+            tPpAttn(k) = get<1>(tPcAttn(0, 0, k)) < max_col;
+        }
+    }
+
+    FLASH_NAMESPACE::copy<Is_even_MN, Is_even_MN, /*Clear_OOB_MN=*/false, /*Clear_OOB_K=*/false>(
+        gmem_tiled_copy_P, tPrAttn, tPgAttn, tPcAttn, tPpAttn, binfo.actual_seqlen_q - m_block * kBlockM
+    );
+}
 
 template<typename Kernel_traits, bool Is_even_MN, bool Is_even_K, typename Params>
 inline __device__ void compute_block_attn_sam(
@@ -227,6 +309,7 @@ inline __device__ void compute_block_attn_sam(
                             Shape<Int<kBlockN>, Int<kHeadDim>>{},
                             make_stride(params.v_row_stride, _1{}));
 
+
     // Setup shared memory tensors
     Tensor sQ = make_tensor(make_smem_ptr(reinterpret_cast<Element *>(smem_)),
                             typename Kernel_traits::SmemLayoutQ{});
@@ -264,6 +347,45 @@ inline __device__ void compute_block_attn_sam(
     ElementAccum c_dummy_s;
     auto c_tensor_s = make_tensor(make_rmem_ptr<ElementAccum>(&c_dummy_s),
                                   make_layout(Shape<Int<kBlockM>, Int<kBlockN>>{}));
+
+    const bool use_pos = params.pos_ptr != nullptr;
+    const bool return_attn = params.attn_ptr != nullptr;
+
+    auto gP = load_pos<Kernel_traits, Is_even_MN, Is_even_K>( 
+        params, bidb, bidh, m_block, (n_block_max - 1)
+    );
+    Tensor tSgP = thr_mma.partition_C(gP);
+                                  
+    // if (thread0()) {
+
+    //     // gP.data() = gP.data() + (-index_t(kBlockN * 2 * params.pos_col_stride));
+    //     auto cta_tiler = make_shape(Int<128>{}, Int<128>{});   
+    //     auto cta_coord = make_coord(m_block, 1);     
+    //     Tensor g_P = local_tile(gP, cta_tiler, cta_coord, Step<_1,_1>{}); 
+    //     Tensor tSg_P = thr_mma.partition_C(g_P);
+    //     print(g_P);
+    //     tSg_P.data() = tSgP.data() + (-index_t(kBlockN * 31 * params.pos_col_stride));
+    //     Tensor acc_s = thr_mma.partition_fragment_C(c_tensor_s); 
+    //     axpby(1.0, tSg_P, 1.0 ,acc_s);
+
+
+    //     printf("\n========\n");
+    //     print(gP);
+    //     printf("\n========\n");
+    //     print(tSg_P);
+  
+        
+    //     printf("\n========\n");
+    //     for (int k = 0; k < size<2>(acc_s); ++k) {
+    //         for (int j = 0; j < size<1>(acc_s); ++j) {
+    //             for (int i = 0; i < size<0>(acc_s); ++i) {
+    //                 printf("%f ", static_cast<float>(acc_s(i,j, k)));
+
+    //             }
+    //         }
+    //     }
+    //     printf("\n========\n");
+    // }
 
     // Copy operations setup
     auto smem_tiled_copy_Q = make_tiled_copy_A(typename Kernel_traits::SmemCopyAtom{}, tiled_mma);
@@ -353,7 +475,6 @@ inline __device__ void compute_block_attn_sam(
             leap = is_last_block ? 0 : leap;
 
             Tensor acc_s = thr_mma.partition_fragment_C(c_tensor_s); // [kBlockM, kBlockN]
-            
             clear(acc_s);
             FLASH_NAMESPACE::cp_async_wait<0>();
             __syncthreads();
@@ -361,6 +482,7 @@ inline __device__ void compute_block_attn_sam(
             // Advance V
             if (masking_step > 0) {
                 tVgV.data() = tVgV.data() + (-int(kBlockN * params.v_row_stride));
+
                 FLASH_NAMESPACE::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tVgV, tVsV, tKVcKV, tKVpKV);
             } else {
                 FLASH_NAMESPACE::copy<Is_even_MN, Is_even_K, /*Clear_OOB_MN=*/true>(
@@ -370,14 +492,20 @@ inline __device__ void compute_block_attn_sam(
             cute::cp_async_fence();
 
             // Scores are all masked, apply mask with 0 valid elements
-            Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout())); // [kBlockM, kBlockN]
-            scale_scores<ElementAccum>(scores, params.scale_softmax);
-            FLASH_NAMESPACE::apply_mask(scores, 0);
+
             FLASH_NAMESPACE::cp_async_wait<0>();
             __syncthreads();
 
+            scale_scores<ElementAccum>(acc_s, params.scale_softmax);
+            if (use_pos) {
+                axpby(1.0, tSgP,1.0 ,acc_s);
+            }
+            Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout())); // [kBlockM, kBlockN]
+            FLASH_NAMESPACE::apply_mask(scores, 0);
+
             if (n_block > n_block_min && !is_last_block) {
                 tKgK.data() = tKgK.data() + (-index_t(kBlockN * leap * params.k_row_stride));
+                tSgP.data() = tSgP.data() + (-index_t(kBlockN * leap * params.pos_col_stride));
                 FLASH_NAMESPACE::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tKgK, tKsK, tKVcKV, tKVpKV);
                 cute::cp_async_fence();
             }
@@ -426,9 +554,13 @@ inline __device__ void compute_block_attn_sam(
                 smem_thr_copy_Q, smem_thr_copy_K
             );
 
-            Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout()));
+                    // Reshape and compute softmax
+            scale_scores<ElementAccum>(acc_s, params.scale_softmax);
+            if (use_pos) {
+                axpby(1.0, tSgP, 1.0 ,acc_s);
+            }
 
-            scale_scores<ElementAccum>(scores, params.scale_softmax);
+            Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout()));
 
 
             // Apply masking for OOB elements (Vision transformers is non-causal, non-local)
@@ -441,6 +573,7 @@ inline __device__ void compute_block_attn_sam(
 
             if (n_block > n_block_min && !is_last_block) {
                 tKgK.data() = tKgK.data() + (-index_t(kBlockN * leap * params.k_row_stride));
+                tSgP.data() = tSgP.data() + (-index_t(kBlockN * leap * params.pos_col_stride));
                 FLASH_NAMESPACE::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tKgK, tKsK, tKVcKV, tKVpKV);
                 cute::cp_async_fence();
             }
@@ -501,16 +634,20 @@ inline __device__ void compute_block_attn_sam(
 
         leap = n_block - next_block_col_idx;
 
+        scale_scores<ElementAccum>(acc_s, params.scale_softmax);
+        if (use_pos) {
+            axpby(1.0, tSgP,1.0 ,acc_s);
+        }
+
         if (!is_last_block) {
             tKgK.data() = tKgK.data() + (-index_t(kBlockN * leap * params.k_row_stride));
+            tSgP.data() = tSgP.data() + (-index_t(kBlockN * leap * params.pos_col_stride));
             FLASH_NAMESPACE::copy</*Is_even_MN=*/true, Is_even_K>(gmem_tiled_copy_QKV, tKgK, tKsK, tKVcKV, tKVpKV);
             cute::cp_async_fence();
         }
 
-        // Reshape and compute softmax
-        Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout())); // [kBlockM, kBlockN]
-        scale_scores<ElementAccum>(scores, params.scale_softmax);
 
+        Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout())); // [kBlockM, kBlockN]
         softmax_rescale_o_sam</*Is_first=*/false>(scores, scores_max, scores_sum, acc_o, M_LOG2E, /*Is_blocksparse_skip=*/false);
 
         // Convert scores to element type and compute O = P @ V

@@ -230,7 +230,7 @@ def example_3_correctness():
 
     # Block-sparse path using a dense mask (all blocks enabled)
     out_sparse = block_sparse_attn_simple(
-        q, k, v, dense_mask, positional=None, softmax_scale=head_dim ** -0.5
+        q, k, v, dense_mask, positional=positional, softmax_scale=head_dim ** -0.5
     )
 
     # Dense baseline with positional bias
@@ -369,7 +369,7 @@ if __name__ == "__main__":
     # example_1_simple_interface()
     # example_2_advanced_interface()
     example_3_correctness()
-    example_4_performance()
+    # example_4_performance()
     # attn  = torch.rand(1, 16, 4096, 4096).cuda().half()
     # pos  = torch.rand(16, 64, 64, 64, 64).cuda().half() 
     

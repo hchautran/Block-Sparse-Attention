@@ -101,6 +101,17 @@ struct Flash_fwd_params {
     index_t pos_col_stride;
 
     // ============================================================================
+    // Optional attention map output
+    // Layout expected: [b, h, seqlen_q, seqlen_k]
+    // Stored in Element type (fp16/bf16) for bandwidth efficiency.
+    // ============================================================================
+    void *__restrict__ attn_ptr;
+    index_t attn_batch_stride;
+    index_t attn_head_stride;
+    index_t attn_row_stride;
+    index_t attn_col_stride;
+
+    // ============================================================================
     // Scaling factors
     // ============================================================================
     float scale_softmax;        // 1 / sqrt(d)

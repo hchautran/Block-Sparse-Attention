@@ -88,8 +88,31 @@ void run_block_attn_sam_smoke() {
     }
 
     for (int i = 0; i <  b * h * seqlen_q * seqlen_q; ++i) {
-        host_pos[i] = static_cast<cutlass::half_t>(0.01f * (i % 7));
+        host_pos[i] = static_cast<cutlass::half_t>(i);
     }
+    // {
+    //     const int tile = 128;
+    //     const int head_stride = 2 * seqlen_q * seqlen_q;
+    //     const int base = 0 * head_stride;
+    //     // printf("first 32x32 tile (b=0,h=2):\n");
+    //     // for (int r = 0; r < tile; ++r) {
+    //     //     const int row_offset = base + r * seqlen_q;
+    //     //     for (int c = 0; c < tile; ++c) {
+    //     //         printf("%3.0f ", static_cast<float>(host_pos[row_offset + c]));
+    //     //     }
+    //     //     printf("\n");
+    //     // }
+    //     const int last_row = seqlen_q - tile;
+    //     const int last_col = seqlen_q - tile;
+    //     printf("last 128x128 tile (b=0,h=2):\n");
+    //     for (int r = 0; r < tile; ++r) {
+    //         const int row_offset = base + (last_row + r) * seqlen_q + last_col;
+    //         for (int c = 0; c < tile; ++c) {
+    //             printf("%3.0f ", static_cast<float>(host_pos[row_offset + c]));
+    //         }
+    //         printf("\n");
+    //     }
+    // }
 
 
     cutlass::half_t *device_q = nullptr, *device_k = nullptr, *device_v = nullptr, *device_o = nullptr, * device_pos= nullptr;
@@ -101,6 +124,7 @@ void run_block_attn_sam_smoke() {
     cudaMalloc(&device_o, total_elems * sizeof(cutlass::half_t));
     cudaMalloc(&device_lse, b * h * seqlen_q * sizeof(float));
     cudaMalloc(&device_pos, b * h * seqlen_q * seqlen_q * sizeof(float));
+
     cudaMemcpy(device_q, host_q.data(), total_elems * sizeof(cutlass::half_t), cudaMemcpyHostToDevice);
     cudaMemcpy(device_k, host_k.data(), total_elems * sizeof(cutlass::half_t), cudaMemcpyHostToDevice);
     cudaMemcpy(device_v, host_v.data(), total_elems * sizeof(cutlass::half_t), cudaMemcpyHostToDevice);
@@ -151,8 +175,8 @@ void run_block_attn_sam_smoke() {
     params.n_block_dim = kBlockN;
     params.num_blocksparse_heads = 1;
     params.pos_ptr = device_pos;
-    params.pos_batch_stride = 0;
-    params.pos_head_stride = 0;
+    params.pos_batch_stride = 16*4096*4096;
+    params.pos_head_stride = 4096*4096;
     params.pos_row_stride = 4096;
     params.pos_col_stride = 1;
     const float scale = 1.0f / sqrtf(static_cast<float>(d));
@@ -170,6 +194,7 @@ void run_block_attn_sam_smoke() {
     }
     dim3 grid(1, b, h);
     kernel<<<grid, KernelTraits::kNThreads, smem_size>>>(params);
+    //todo: help me return the attention map so that I can check whether positional bias adding is correct 
     cudaError_t launch_err = cudaGetLastError();
     if (launch_err != cudaSuccess) {
         printf("Block attn kernel launch error: %s\n", cudaGetErrorString(launch_err));
@@ -181,7 +206,7 @@ void run_block_attn_sam_smoke() {
 
     std::vector<cutlass::half_t> host_o(total_elems);
     cudaMemcpy(host_o.data(), device_o, total_elems * sizeof(cutlass::half_t), cudaMemcpyDeviceToHost);
-    printf("Block attn O[0]=%f\n", static_cast<float>(host_o[0]));
+    printf("Block attn O[0]=%f\n", static_cast<float>(host_o[4096]));
 
     cudaFree(device_q);
     cudaFree(device_k);
