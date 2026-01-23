@@ -116,6 +116,8 @@ if not SKIP_CUDA_BUILD:
 
     nvcc_flags = [
         "-O3",
+        # "-DFLASH_DEBUG_PRINT",
+        # "-g",  "-lineinfo", 
         "-std=c++17",
         "-U__CUDA_NO_HALF_OPERATORS__",
         "-U__CUDA_NO_HALF_CONVERSIONS__",
@@ -135,13 +137,6 @@ if not SKIP_CUDA_BUILD:
     sources = [
         "csrc/block_sparse_attn/flash_api.cpp",
         "csrc/block_sparse_attn/src/flash_fwd_hdim64_fp16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim64_bf16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim32_fp16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim32_bf16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim128_fp16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim128_bf16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim256_fp16.cu",
-        "csrc/block_sparse_attn/src/flash_fwd_hdim256_bf16.cu",
     ]
 
     # Get PyTorch library path for RPATH embedding

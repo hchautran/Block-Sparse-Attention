@@ -79,12 +79,12 @@ void run_flash_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 // Head dimension specific launchers
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-template<typename T>
-void run_mha_fwd_hdim32(Flash_fwd_params &params, cudaStream_t stream) {
-    constexpr static int Headdim = 32;
-    // SAM doesn't use head_dim=32, but included for completeness
-    run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>>(params, stream);
-}
+// template<typename T>
+// void run_mha_fwd_hdim32(Flash_fwd_params &params, cudaStream_t stream) {
+//     constexpr static int Headdim = 32;
+//     // SAM doesn't use head_dim=32, but included for completeness
+//     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>>(params, stream);
+// }
 
 template<typename T>
 void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
@@ -94,28 +94,28 @@ void run_mha_fwd_hdim64(Flash_fwd_params &params, cudaStream_t stream) {
     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 128, 4, false, false, T>>(params, stream);
 }
 
-template<typename T>
-void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
-    constexpr static int Headdim = 128;
+// template<typename T>
+// void run_mha_fwd_hdim128(Flash_fwd_params &params, cudaStream_t stream) {
+//     constexpr static int Headdim = 128;
 
-    // Detect GPU architecture
-    auto [cc_major, cc_minor] = get_compute_capability(get_current_device());
-    bool is_sm8x = cc_major == 8 && cc_minor > 0;  // sm86, sm89
+//     // Detect GPU architecture
+//     auto [cc_major, cc_minor] = get_compute_capability(get_current_device());
+//     bool is_sm8x = cc_major == 8 && cc_minor > 0;  // sm86, sm89
 
-    if (is_sm8x) {
-        // For sm86/89: 128x32 uses 48KB smem, allows 2 CTAs per SM
-        run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 32, 4, false, false, T>>(params, stream);
-    } else {
-        // For sm80 (A100), sm90 (H100): 128x64
-        run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 64, 4, false, false, T>>(params, stream);
-    }
-}
+//     if (is_sm8x) {
+//         // For sm86/89: 128x32 uses 48KB smem, allows 2 CTAs per SM
+//         run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 32, 4, false, false, T>>(params, stream);
+//     } else {
+//         // For sm80 (A100), sm90 (H100): 128x64
+//         run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 128, 64, 4, false, false, T>>(params, stream);
+//     }
+// }
 
-template<typename T>
-void run_mha_fwd_hdim256(Flash_fwd_params &params, cudaStream_t stream) {
-    constexpr static int Headdim = 256;
-    // Larger head dimension: use smaller N blocks
-    run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>>(params, stream);
-}
+// template<typename T>
+// void run_mha_fwd_hdim256(Flash_fwd_params &params, cudaStream_t stream) {
+//     constexpr static int Headdim = 256;
+//     // Larger head dimension: use smaller N blocks
+//     run_flash_fwd<Flash_fwd_kernel_traits<Headdim, 64, 64, 4, false, false, T>>(params, stream);
+// }
 
 }  // namespace FLASH_NAMESPACE

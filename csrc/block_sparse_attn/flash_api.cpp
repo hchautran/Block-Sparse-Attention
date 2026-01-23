@@ -10,6 +10,7 @@
 #include <torch/nn/functional.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <c10/cuda/CUDAStream.h>
+#include <cstdio>
 
 #include <cutlass/numeric_types.h>
 
@@ -112,10 +113,9 @@ void set_params_fprop(
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
-    FP16_SWITCH(!params.is_bf16, [&] {
-        HEADDIM_SWITCH(params.d, [&] {
-            run_mha_fwd_<elem_type, kHeadDim>(params, stream);
-        });
+    TORCH_CHECK(!params.is_bf16, "bf16 is not supported in this build");
+    HEADDIM_SWITCH(params.d, [&] {
+        run_mha_fwd_<cutlass::half_t, kHeadDim>(params, stream);
     });
 }
 
@@ -250,6 +250,54 @@ mha_varlen_fwd(
 
     // Set up parameters
     Flash_fwd_params params;
+    // auto print_params = [](const Flash_fwd_params &p) {
+    //     std::printf("Flash_fwd_params {\n");
+    //     std::printf("  q_ptr=%p k_ptr=%p v_ptr=%p o_ptr=%p softmax_lse_ptr=%p\n",
+    //                 p.q_ptr, p.k_ptr, p.v_ptr, p.o_ptr, p.softmax_lse_ptr);
+    //     std::printf("  q_batch_stride=%lld k_batch_stride=%lld v_batch_stride=%lld o_batch_stride=%lld\n",
+    //                 static_cast<long long>(p.q_batch_stride),
+    //                 static_cast<long long>(p.k_batch_stride),
+    //                 static_cast<long long>(p.v_batch_stride),
+    //                 static_cast<long long>(p.o_batch_stride));
+    //     std::printf("  q_row_stride=%lld k_row_stride=%lld v_row_stride=%lld o_row_stride=%lld\n",
+    //                 static_cast<long long>(p.q_row_stride),
+    //                 static_cast<long long>(p.k_row_stride),
+    //                 static_cast<long long>(p.v_row_stride),
+    //                 static_cast<long long>(p.o_row_stride));
+    //     std::printf("  q_head_stride=%lld k_head_stride=%lld v_head_stride=%lld o_head_stride=%lld\n",
+    //                 static_cast<long long>(p.q_head_stride),
+    //                 static_cast<long long>(p.k_head_stride),
+    //                 static_cast<long long>(p.v_head_stride),
+    //                 static_cast<long long>(p.o_head_stride));
+    //     std::printf("  b=%d h=%d h_k=%d h_h_k_ratio=%d d=%d d_rounded=%d\n",
+    //                 p.b, p.h, p.h_k, p.h_h_k_ratio, p.d, p.d_rounded);
+    //     std::printf("  seqlen_q=%d seqlen_k=%d seqlen_q_rounded=%d seqlen_k_rounded=%d total_q=%d\n",
+    //                 p.seqlen_q, p.seqlen_k, p.seqlen_q_rounded, p.seqlen_k_rounded, p.total_q);
+    //     std::printf("  cu_seqlens_q=%p cu_seqlens_k=%p seqused_k=%p knew_ptr=%p seqlen_knew=%d\n",
+    //                 static_cast<const void *>(p.cu_seqlens_q),
+    //                 static_cast<const void *>(p.cu_seqlens_k),
+    //                 static_cast<const void *>(p.seqused_k),
+    //                 p.knew_ptr,
+    //                 p.seqlen_knew);
+    //     std::printf("  blockmask=%p head_mask_type=%p m_block_dim=%d n_block_dim=%d num_blocksparse_heads=%d\n",
+    //                 static_cast<const void *>(p.blockmask),
+    //                 static_cast<const void *>(p.head_mask_type),
+    //                 p.m_block_dim,
+    //                 p.n_block_dim,
+    //                 p.num_blocksparse_heads);
+    //     std::printf("  pos_ptr=%p pos_batch_stride=%lld pos_head_stride=%lld pos_row_stride=%lld pos_col_stride=%lld\n",
+    //                 p.pos_ptr,
+    //                 static_cast<long long>(p.pos_batch_stride),
+    //                 static_cast<long long>(p.pos_head_stride),
+    //                 static_cast<long long>(p.pos_row_stride),
+    //                 static_cast<long long>(p.pos_col_stride));
+    //     std::printf("  scale_softmax=%f scale_softmax_log2=%f is_bf16=%d is_seqlens_k_cumulative=%d\n",
+    //                 p.scale_softmax,
+    //                 p.scale_softmax_log2,
+    //                 static_cast<int>(p.is_bf16),
+    //                 static_cast<int>(p.is_seqlens_k_cumulative));
+    //     std::printf("}\n");
+    // };
     set_params_fprop(
         params,
         batch_size,
@@ -288,6 +336,8 @@ mha_varlen_fwd(
         params.pos_row_stride = 0;
         params.pos_col_stride = 0;
     }
+
+    // print_params(params);
 
     // Run kernel
     if (max_seqlen_k > 0) {

@@ -3,6 +3,7 @@
 // and https://github.com/pytorch/pytorch/blob/master/aten/src/ATen/Dispatch.h
 
 #pragma once
+#include <stdexcept>
 
 /// @param COND       - a boolean expression to switch by
 /// @param CONST_NAME - a name given for the constexpr bool variable.
@@ -37,17 +38,12 @@
   }()
 
 
-  #define HEADDIM_SWITCH(HEADDIM, ...)\
-  [&] {                                       \
-    if (HEADDIM <= 32) {                      \
-      constexpr static int kHeadDim = 32;     \
-      return __VA_ARGS__();                   \
-    } else if (HEADDIM <= 64) {               \
-      constexpr static int kHeadDim = 64;     \
-      return __VA_ARGS__();                   \
-    } else if (HEADDIM <= 128) {           \
-      constexpr static int kHeadDim = 128; \
-      return __VA_ARGS__();                \
-    }                                         \
+#define HEADDIM_SWITCH(HEADDIM, ...)                         \
+  [&] {                                                      \
+    if (HEADDIM <= 64) {                                     \
+      constexpr static int kHeadDim = 64;                    \
+      return __VA_ARGS__();                                  \
+    }                                                        \
+    throw std::runtime_error("Only head_dim <= 64 supported");\
   }()
   

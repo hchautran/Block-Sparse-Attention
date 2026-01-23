@@ -113,6 +113,8 @@ struct Flash_fwd_kernel_traits : public Base {
     using SmemLayoutO = decltype(tile_to_shape(
         SmemLayoutAtomO{},
         Shape<Int<kBlockM>, Int<kHeadDim>>{}));
+    using SmemLayoutBias = Layout<Shape<Int<kBlockM>, Int<kBlockN>>,
+                                  Stride<Int<kBlockN>, _1>>;
     using SmemCopyAtomO = Copy_Atom<DefaultCopy, Element>;
     using SmemCopyAtomOaccum = Copy_Atom<DefaultCopy, ElementAccum>;
 

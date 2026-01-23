@@ -110,12 +110,17 @@ struct Flash_fwd_kernel_traits : public Base {
         SmemLayoutAtomO{},
         Shape<Int<kBlockM>, Int<kHeadDim>>{}));
     using SmemCopyAtomO = Copy_Atom<DefaultCopy, elem_type>;
+    using SmemLayoutBias = Layout<Shape<Int<kBlockM>, Int<kBlockN>>,
+                                  Stride<Int<kBlockN>, _1>>;
 
     static constexpr int kSmemQCount = size(SmemLayoutQ{});
     static constexpr int kSmemKVCount = size(SmemLayoutKV{}) * 2;
     static constexpr int kSmemQSize = kSmemQCount * sizeof(Element);
     static constexpr int kSmemKVSize = kSmemKVCount * sizeof(Element);
-    static constexpr int kSmemSize = Share_Q_K_smem ? std::max(kSmemQSize, kSmemKVSize) : kSmemQSize + kSmemKVSize;
+    static constexpr int kSmemBiasCount = size(SmemLayoutBias{});
+    static constexpr int kSmemBiasSize = kSmemBiasCount * sizeof(Element);
+    static constexpr int kSmemSize = (Share_Q_K_smem ? std::max(kSmemQSize, kSmemKVSize) : kSmemQSize + kSmemKVSize)
+                                     + kSmemBiasSize;
 
     static constexpr int kGmemElemsPerLoad = sizeof(cute::uint128_t) / sizeof(Element);
     static_assert(kHeadDim % kGmemElemsPerLoad == 0, "kHeadDim must be a multiple of kGmemElemsPerLoad");

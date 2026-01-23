@@ -208,9 +208,9 @@ def example_3_correctness():
 
     import torch.nn.functional as F
 
-    batch_size = 2
-    seq_len = 128
-    num_heads = 8
+    batch_size = 1
+    seq_len = 4096 
+    num_heads = 16 
     head_dim = 64
     block_size = 128
     dtype = torch.float16
@@ -223,23 +223,25 @@ def example_3_correctness():
     nrow = ncol = (seq_len + block_size - 1) // block_size
     dense_mask = torch.ones(batch_size, num_heads, nrow, ncol,
                             device=device, dtype=torch.bool)
+    print(dense_mask.shape)
 
-    positional = torch.randn(batch_size, num_heads, seq_len, seq_len,
+    positional = torch.randint(0, 100, size=(batch_size, num_heads, seq_len, seq_len),
                              device=device, dtype=dtype)
 
     # Block-sparse path using a dense mask (all blocks enabled)
     out_sparse = block_sparse_attn_simple(
-        q, k, v, dense_mask, positional=positional, softmax_scale=head_dim ** -0.5
+        q, k, v, dense_mask, positional=None, softmax_scale=head_dim ** -0.5
     )
 
     # Dense baseline with positional bias
-    q_t = q.transpose(1, 2).float()
-    k_t = k.transpose(1, 2).float()
-    v_t = v.transpose(1, 2).float()
-    attn = torch.matmul(q_t, k_t.transpose(-2, -1)) * (head_dim ** -0.5)
-    attn = attn + positional.float()
+    q_t = q.transpose(1, 2)
+    k_t = k.transpose(1, 2)
+    v_t = v.transpose(1, 2)
+
+    attn = torch.matmul(q_t * (head_dim ** -0.5), k_t.transpose(-2, -1))
+    attn = attn + positional  # keep dtype consistent with kernel
     attn = torch.softmax(attn, dim=-1)
-    out_dense = torch.matmul(attn, v_t).transpose(1, 2).to(dtype)
+    out_dense = torch.matmul(attn, v_t).transpose(1, 2)
 
     diff = (out_sparse - out_dense).abs()
     max_abs = diff.max().item()
@@ -366,10 +368,10 @@ if __name__ == "__main__":
 
     # example_1_simple_interface()
     # example_2_advanced_interface()
-    # example_3_correctness()
-    # example_4_performance()
-    attn  = torch.rand(1, 16, 4096, 4096).cuda().half()
-    pos  = torch.rand(16, 64, 64, 64, 64).cuda().half() 
+    example_3_correctness()
+    example_4_performance()
+    # attn  = torch.rand(1, 16, 4096, 4096).cuda().half()
+    # pos  = torch.rand(16, 64, 64, 64, 64).cuda().half() 
     
     # assert torch.allclose(attn + pos.view(1, 16, 4096, 4096),(attn.view(16, 64, 64, 64, 64) + pos).view(1, 16, 4096, 4096))
 

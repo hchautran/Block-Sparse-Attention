@@ -1,0 +1,34 @@
+
+======================================================================
+SAM Block Sparse Attention - Usage Examples
+======================================================================
+
+======================================================================
+Example 3: Correctness Check (Dense vs Block Sparse)
+======================================================================
+Flash_fwd_params {
+  q_ptr=0x7ff85c000000 k_ptr=0x7ff85c800000 v_ptr=0x7ff85a000000 o_ptr=0x7ff85a800000 softmax_lse_ptr=0x7ff85b405000
+  q_batch_stride=0 k_batch_stride=0 v_batch_stride=0 o_batch_stride=0
+  q_row_stride=1024 k_row_stride=1024 v_row_stride=1024 o_row_stride=1024
+  q_head_stride=64 k_head_stride=64 v_head_stride=64 o_head_stride=64
+  b=1 h=16 h_k=16 h_h_k_ratio=1 d=64 d_rounded=64
+  seqlen_q=4096 seqlen_k=4096 seqlen_q_rounded=4096 seqlen_k_rounded=4096 total_q=4096
+  cu_seqlens_q=0x7ff85b404000 cu_seqlens_k=0x7ff85b404000 seqused_k=(nil) knew_ptr=(nil) seqlen_knew=0
+  blockmask=0x7ff85b44d000 head_mask_type=0x7ff85b404e00 m_block_dim=128 n_block_dim=128 num_blocksparse_heads=16
+  pos_ptr=0x7ff820000000 pos_batch_stride=268435456 pos_head_stride=16777216 pos_row_stride=4096 pos_col_stride=1
+  scale_softmax=0.125000 scale_softmax_log2=0.180337 is_bf16=0 is_seqlens_k_cumulative=1
+}
+
+Max abs diff: 2.248e+00
+Mean abs diff: 1.855e-01
+❌ Correctness check failed.
+Tensor-likes are not close!
+
+Mismatched elements: 4033977 / 4194304 (96.2%)
+Greatest absolute difference: 2.248046875 at index (0, 899, 13, 55) (up to 0.01 allowed)
+Greatest relative difference: inf at index (0, 74, 12, 6) (up to 0.01 allowed)
+
+======================================================================
+All examples completed!
+======================================================================
+
