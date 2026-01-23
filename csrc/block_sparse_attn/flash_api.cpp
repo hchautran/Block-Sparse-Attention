@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2024, Tri Dao.
- * Adapted by Junxian Guo.
+ * Adapted by Hoai-Chau Tran
  * Block Sparse Attention API - optimized for vision transformer inference.
  *
  * Removed: backward pass, dropout, causal masking, streaming, window attention

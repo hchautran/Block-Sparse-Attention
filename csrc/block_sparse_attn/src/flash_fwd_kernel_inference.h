@@ -2,7 +2,7 @@
  * Copyright (c) 2024, Tri Dao.
  ******************************************************************************/
 /******************************************************************************
- * Adapted by Junxian Guo from https://github.com/Dao-AILab/flash-attention
+ * Adapted by Hoai-Chau Tran   from https://github.com/Dao-AILab/flash-attention
  ******************************************************************************/
 /******************************************************************************
  * Vision Transformer Simplified Version
@@ -15,13 +15,10 @@
  * - Causal masking (is_causal always false for vision transformers)
  * - Local window attention (not used in vision transformers)
  * - ALiBi positional bias (not used in vision models)
- * - Streaming attention (not used in vision transformers)
- * - Dense attention path (Vision transformers only uses block-sparse)
  * - Return softmax values (training-only feature)
  * - RNG/Philox seed handling (dropout-related, not needed)
  *
  * KEPT FEATURES (essential for vision transformers):
- * - Block-sparse attention with explicit mask patterns
  * - Softmax computation and rescaling
  * - Support for varying sequence lengths (Is_even_MN, Is_even_K)
  *
@@ -143,7 +140,7 @@ inline __device__ auto load_pos(
     const int tidx = threadIdx.x;
 
     const BlockInfo</*Varlen=*/!Is_even_MN> binfo(params, bidb);
-    const index_t row_offset_pos = binfo.q_offset(params.pos_batch_stride, params.pos_row_stride, bidb)
+    const index_t row_offset_pos = params.pos_batch_stride  * bidb
         + bidh * params.pos_head_stride
         + m_block * kBlockM * params.pos_row_stride
         + n_block * kBlockN * params.pos_col_stride;
@@ -475,6 +472,8 @@ inline __device__ void compute_block_attn_sam(
             leap = is_last_block ? 0 : leap;
 
             Tensor acc_s = thr_mma.partition_fragment_C(c_tensor_s); // [kBlockM, kBlockN]
+
+            
             clear(acc_s);
             FLASH_NAMESPACE::cp_async_wait<0>();
             __syncthreads();
@@ -492,16 +491,16 @@ inline __device__ void compute_block_attn_sam(
             cute::cp_async_fence();
 
             // Scores are all masked, apply mask with 0 valid elements
+            scale_scores<ElementAccum>(acc_s, params.scale_softmax);
+
 
             FLASH_NAMESPACE::cp_async_wait<0>();
             __syncthreads();
 
-            scale_scores<ElementAccum>(acc_s, params.scale_softmax);
             if (use_pos) {
                 axpby(1.0, tSgP,1.0 ,acc_s);
             }
             Tensor scores = make_tensor(acc_s.data(), FLASH_NAMESPACE::convert_layout_acc_rowcol(acc_s.layout())); // [kBlockM, kBlockN]
-            FLASH_NAMESPACE::apply_mask(scores, 0);
 
             if (n_block > n_block_min && !is_last_block) {
                 tKgK.data() = tKgK.data() + (-index_t(kBlockN * leap * params.k_row_stride));

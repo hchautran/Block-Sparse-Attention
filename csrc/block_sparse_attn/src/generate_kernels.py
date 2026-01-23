@@ -71,7 +71,7 @@ def get_all_kernels() -> List[Kernel]:
 
 def write_kernel(kernel: Kernel, autogen_dir: Path) -> None:
     prelude = """// Copyright (c) 2024, Tri Dao.
-// Adapted by Junxian Guo.
+// Adapted by Hoai-Chau Tran
 // Splitting the different head dimensions to different files to speed up compilation.
 // This file is auto-generated. See "generate_kernels.py"\n"""
     content = prelude + kernel.template

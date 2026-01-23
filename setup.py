@@ -214,7 +214,7 @@ setup(
             "block_sparse_attn.egg-info",
         )
     ),
-    author="Junxian Guo",
+    author="Hoai-Chau Tran",
     author_email="junxian@mit.edu",
     description="Block Sparse Attention for Vision Transformers (Inference Only)",
     long_description=long_description,

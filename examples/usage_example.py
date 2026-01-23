@@ -129,7 +129,7 @@ def example_2_advanced_interface():
     from block_sparse_attn.attention import block_sparse_attn, prepare_varlen_inputs
 
     # Smaller example for clarity
-    num_tokens = 256
+    num_tokens = 4096 
     batch_size = 4
     num_heads = 8
     head_dim = 64
@@ -208,7 +208,7 @@ def example_3_correctness():
 
     import torch.nn.functional as F
 
-    batch_size = 1
+    batch_size = 8 
     seq_len = 4096 
     num_heads = 16 
     head_dim = 64
@@ -271,8 +271,8 @@ def example_4_performance():
     import time
     import torch.nn.functional as F
 
-    seq_len = 4096
-    batch_size = 16 
+    seq_len = 196 
+    batch_size = 25 
     num_heads = 16
     head_dim = 64
     block_size = 128
@@ -298,9 +298,13 @@ def example_4_performance():
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(100):
-        _ = F.scaled_dot_product_attention(
-            q_t, k_t, v_t, attn_mask=None, dropout_p=0.0, is_causal=False
-        )
+        attn = torch.matmul(q_t * (head_dim ** -0.5), k_t.transpose(-2, -1))
+        # attn = attn + positional  # keep dtype consistent with kernel
+        attn = torch.softmax(attn, dim=-1)
+        out_dense = torch.matmul(attn, v_t).transpose(1, 2)
+        # _ = F.scaled_dot_product_attention(
+            # q_t, k_t, v_t, attn_mask=None, dropout_p=0.0, is_causal=False
+        # )
     torch.cuda.synchronize()
     sdpa_time = (time.time() - start) / 100
     print(f"   Time: {sdpa_time*1000:.2f} ms")
@@ -369,7 +373,7 @@ if __name__ == "__main__":
     # example_1_simple_interface()
     # example_2_advanced_interface()
     example_3_correctness()
-    # example_4_performance()
+    example_4_performance()
     # attn  = torch.rand(1, 16, 4096, 4096).cuda().half()
     # pos  = torch.rand(16, 64, 64, 64, 64).cuda().half() 
     

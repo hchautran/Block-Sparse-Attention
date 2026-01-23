@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2024, Tri Dao.
- * Adapted by Junxian Guo.
+ * Adapted by Hoai-Chau Tran
  * Optimized for vision transformer inference.
  ******************************************************************************/
 

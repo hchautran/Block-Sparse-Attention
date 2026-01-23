@@ -2,7 +2,7 @@
  * Copyright (c) 2024, Tri Dao.
  ******************************************************************************/
 /******************************************************************************
- * Adapted by Junxian Guo from https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/src/softmax.h
+ * Adapted by Hoai-Chau Tran from https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/src/softmax.h
  ******************************************************************************/
 
 #pragma once

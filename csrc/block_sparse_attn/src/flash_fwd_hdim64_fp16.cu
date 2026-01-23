@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2024, Tri Dao.
- * Adapted by Junxian Guo.
+ * Adapted by Hoai-Chau Tran
  * Vision transformer kernel instantiation for head_dim=64, fp16.
  * This file is optimized for vision transformers which uses fp16 and head_dim=64.
  ******************************************************************************/

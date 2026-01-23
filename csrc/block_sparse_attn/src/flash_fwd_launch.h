@@ -1,6 +1,6 @@
 /******************************************************************************
  * Copyright (c) 2024, Tri Dao.
- * Adapted by Junxian Guo.
+ * Adapted by Hoai-Chau Tran
  * Simplified launcher for vision transformer inference - no dropout, no causal.
  ******************************************************************************/
 
@@ -18,7 +18,6 @@ namespace FLASH_NAMESPACE {
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // Simplified kernel launcher for vision transformers
-// Template parameters reduced from 9 to 3:
 // - Kernel_traits: Hardware configuration
 // - Is_even_MN: Whether sequence lengths are multiples of block size
 // - Is_even_K: Whether head dimension is multiple of alignment

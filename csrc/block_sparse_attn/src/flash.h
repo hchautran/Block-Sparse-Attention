@@ -2,7 +2,7 @@
  * Copyright (c) 2023, Tri Dao.
  ******************************************************************************/
 /******************************************************************************
- * Adapted by Junxian Guo from https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/src/flash.h
+ * Adapted by Hoai-Chau Tran from https://github.com/Dao-AILab/flash-attention/blob/main/csrc/flash_attn/src/flash.h
  ******************************************************************************/
 
 #pragma once
