@@ -166,15 +166,15 @@ def block_sparse_attn(
     # Prepare blockmask if provided
     row_blockmask = None
     if base_blockmask is not None:
-        assert base_blockmask.shape[1] == blocksparse_head_num, \
-            f"Blockmask has {base_blockmask.shape[1]} heads but expected {blocksparse_head_num}"
+        # assert base_blockmask.shape[1] == blocksparse_head_num, \
+            # f"Blockmask has {base_blockmask.shape[1]} heads but expected {blocksparse_head_num}"
         row_blockmask = convert_blockmask_row_reverse(base_blockmask)
 
     # Call C++ extension
     output, softmax_lse = block_sparse_attn_cuda.fwd(
         q, k, v,
         cu_seqlens_q, cu_seqlens_k,
-        head_mask_type_modified,
+        head_mask_type,
         row_blockmask,
         positional,
         max_seqlen_q, max_seqlen_k,

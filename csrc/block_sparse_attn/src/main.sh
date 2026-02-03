@@ -19,7 +19,6 @@ fi
 
 if [ ! -f "${CUTLASS_DIR}/include/cute/algorithm/copy.hpp" ]; then
   echo "CUTLASS headers not found at ${CUTLASS_DIR}/include." >&2
-  echo "Check that the cutlass submodule is present or run this script with bash." >&2
   exit 1
 fi
 
@@ -33,4 +32,4 @@ fi
   -o "main_sm${SM_ARCH}" \
   "main.cu"
 
-./main_sm${SM_ARCH}
+./main_sm${SM_ARCH} >> out.txt

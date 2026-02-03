@@ -63,7 +63,7 @@ __global__ void flash_fwd_test_kernel(FLASH_NAMESPACE::Flash_fwd_params params) 
 }
 
 void run_block_attn_sam_smoke() {
-    using KernelTraits = Flash_fwd_kernel_traits<64, 128, 128, 4, false, false, cutlass::half_t>;
+    using KernelTraits = Flash_fwd_kernel_traits<64, 128, 128, 1, false, false, cutlass::half_t>;
     constexpr int kBlockM = KernelTraits::kBlockM;
     constexpr int kBlockN = KernelTraits::kBlockN;
     constexpr int kHeadDim = KernelTraits::kHeadDim;

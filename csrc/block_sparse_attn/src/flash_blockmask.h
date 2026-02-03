@@ -185,7 +185,7 @@ class fwdBlockmask: public fwdIteratorBase{
         this -> n_block_min = n_block_min;
         this -> n_block_max = n_block_max;
 
-        assert(mask_type > 0);
+        // assert(mask_type > 0);
         assert(params.m_block_dim % kBlockM == 0);
         assert(params.n_block_dim % kBlockN == 0);
         

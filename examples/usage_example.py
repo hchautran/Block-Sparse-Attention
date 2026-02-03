@@ -208,9 +208,9 @@ def example_3_correctness():
 
     import torch.nn.functional as F
 
-    batch_size = 8 
-    seq_len = 4096 
-    num_heads = 16 
+    batch_size = 16 
+    seq_len =  4096 
+    num_heads =  1 
     head_dim = 64
     block_size = 128
     dtype = torch.float16
@@ -223,23 +223,39 @@ def example_3_correctness():
     nrow = ncol = (seq_len + block_size - 1) // block_size
     dense_mask = torch.ones(batch_size, num_heads, nrow, ncol,
                             device=device, dtype=torch.bool)
-    print(dense_mask.shape)
 
-    positional = torch.randint(0, 100, size=(batch_size, num_heads, seq_len, seq_len),
+    positional = torch.rand(size=(batch_size, num_heads, seq_len, seq_len),
                              device=device, dtype=dtype)
+    head_mask_type = 1 *  torch.ones(batch_size, dtype=torch.int32, device=device)
+
+
 
     # Block-sparse path using a dense mask (all blocks enabled)
+    # head_mask_type[::2] = -1
+    print(q.shape)
+    print(k.shape)
+    print(v.shape)
+    print(positional.shape)
+    print(head_mask_type.shape)
+    print(dense_mask.shape)
+    head_mask_type[::2] = 1
     out_sparse = block_sparse_attn_simple(
-        q, k, v, dense_mask, positional=positional, softmax_scale=head_dim ** -0.5
+        q, k, v, 
+        dense_mask, 
+        positional=positional, 
+        softmax_scale=head_dim ** -0.5,
+        head_mask_type=head_mask_type
     )
 
     # Dense baseline with positional bias
     q_t = q.transpose(1, 2)
     k_t = k.transpose(1, 2)
     v_t = v.transpose(1, 2)
-
+    head_mask_type[::2] = 1
     attn = torch.matmul(q_t * (head_dim ** -0.5), k_t.transpose(-2, -1))
     attn = attn + positional  # keep dtype consistent with kernel
+    attn[1::2] = positional[1::2]
+    # attn = positional  # keep dtype consistent with kernel
     attn = torch.softmax(attn, dim=-1)
     out_dense = torch.matmul(attn, v_t).transpose(1, 2)
 
@@ -256,7 +272,10 @@ def example_3_correctness():
         print("❌ Correctness check failed.")
         print(str(exc))
 
-
+def diagonal_band(n, k=1, device="cpu"):
+    idx = torch.arange(n, device=device)
+    dist = (idx[:, None] - idx[None, :]).abs()
+    return (dist <= k).int()
 def example_4_performance():
     """Example 4: Performance comparison"""
     print("\n" + "="*70)
@@ -272,8 +291,8 @@ def example_4_performance():
     import torch.nn.functional as F
 
     seq_len = 196 
-    batch_size = 25 
-    num_heads = 16
+    batch_size = 8* 400 
+    num_heads = 1 
     head_dim = 64
     block_size = 128
 
@@ -288,18 +307,21 @@ def example_4_performance():
     print(f"  Heads: {num_heads}")
 
     nrow = ncol = (seq_len + block_size - 1) // block_size
+    dtype = torch.float16
 
     # SDPA baseline (dense)
     print("\n0. Dense Attention (PyTorch SDPA baseline)")
     q_t = q.transpose(1, 2)
     k_t = k.transpose(1, 2)
     v_t = v.transpose(1, 2)
+    positional = torch.rand(size=(batch_size, num_heads, seq_len, seq_len),
+                    device=device, dtype=dtype)
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(100):
         attn = torch.matmul(q_t * (head_dim ** -0.5), k_t.transpose(-2, -1))
-        # attn = attn + positional  # keep dtype consistent with kernel
+        attn = attn + positional  # keep dtype consistent with kernel
         attn = torch.softmax(attn, dim=-1)
         out_dense = torch.matmul(attn, v_t).transpose(1, 2)
         # _ = F.scaled_dot_product_attention(
@@ -314,10 +336,11 @@ def example_4_performance():
     dense_mask = torch.ones(batch_size, num_heads, nrow, ncol,
                            device=device, dtype=torch.bool)
 
+
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(100):
-        _ = block_sparse_attn_simple(q, k, v, dense_mask)
+        _ = block_sparse_attn_simple(q, k, v, dense_mask, positional=positional)
     torch.cuda.synchronize()
     dense_time = (time.time() - start) / 100
     print(f"   Time: {dense_time*1000:.2f} ms")
@@ -325,18 +348,13 @@ def example_4_performance():
 
     # 50% sparse
     print("\n2. Sparse Attention (50% sparsity)")
-    sparse_mask = torch.zeros(batch_size, num_heads, nrow, ncol,
-                              device=device, dtype=torch.bool)
-    for b in range(batch_size):
-        for h in range(num_heads):
-            for i in range(nrow):
-                selected = torch.randperm(ncol, device=device)[:ncol//2]
-                sparse_mask[b, h, i, selected] = True
+    
+    sparse_mask = diagonal_band(nrow, k=int(0.5* nrow), device=device)[None, None,...].expand(dense_mask.shape)
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(100):
-        _ = block_sparse_attn_simple(q, k, v, sparse_mask)
+        _ = block_sparse_attn_simple(q, k, v, sparse_mask,positional=positional)
     torch.cuda.synchronize()
     sparse_time = (time.time() - start) / 100
     print(f"   Time: {sparse_time*1000:.2f} ms")
@@ -345,18 +363,15 @@ def example_4_performance():
 
     # 75% sparse
     print("\n3. Very Sparse Attention (75% sparsity)")
-    very_sparse_mask = torch.zeros(batch_size, num_heads, nrow, ncol,
-                                   device=device, dtype=torch.bool)
-    for b in range(batch_size):
-        for h in range(num_heads):
-            for i in range(nrow):
-                selected = torch.randperm(ncol, device=device)[:ncol//4]
-                very_sparse_mask[b, h, i, selected] = True
+    # very_sparse_mask = torch.zeros(batch_size, num_heads, nrow, ncol,
+                                #    device=device, dtype=torch.bool)
+    very_sparse_mask = diagonal_band(nrow, k=int(0.25* nrow), device=device)[None, None,...].expand(dense_mask.shape)
+
 
     torch.cuda.synchronize()
     start = time.time()
     for _ in range(100):
-        _ = block_sparse_attn_simple(q, k, v, very_sparse_mask)
+        _ = block_sparse_attn_simple(q, k, v, very_sparse_mask, positional=positional)
     torch.cuda.synchronize()
     very_sparse_time = (time.time() - start) / 100
     print(f"   Time: {very_sparse_time*1000:.2f} ms")

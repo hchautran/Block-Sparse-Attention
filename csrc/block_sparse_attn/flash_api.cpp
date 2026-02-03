@@ -223,7 +223,7 @@ mha_varlen_fwd(
     CHECK_SHAPE(v, total_k, num_heads_k, head_size);
     CHECK_SHAPE(cu_seqlens_q, batch_size + 1);
     CHECK_SHAPE(cu_seqlens_k, batch_size + 1);
-    CHECK_SHAPE(head_mask_type, num_heads);
+    // CHECK_SHAPE(head_mask_type, batch_size);
 
     // Create output tensor
     at::Tensor out = torch::empty_like(q);

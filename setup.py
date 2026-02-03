@@ -137,6 +137,7 @@ if not SKIP_CUDA_BUILD:
     sources = [
         "csrc/block_sparse_attn/flash_api.cpp",
         "csrc/block_sparse_attn/src/flash_fwd_hdim64_fp16.cu",
+        # "csrc/block_sparse_attn/src/flash_fwd_hdim80_fp16.cu",
     ]
 
     # Get PyTorch library path for RPATH embedding
