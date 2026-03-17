@@ -1,35 +1,3 @@
-"""
-Block Sparse Attention - Simplified Python Interface
-
-This module provides a simplified interface for block sparse attention.
-Optimized for vision transformer inference with the following assumptions:
-- No dropout (always p_dropout=0)
-- No causal masking (bidirectional attention)
-- No backward pass (inference only)
-- No streaming attention
-
-Usage:
-    from block_sparse_attn.attention import block_sparse_attn
-    from examples.masks import generate_sam_image_to_prompt_mask
-
-    # Generate mask
-    mask = generate_sam_image_to_prompt_mask(
-        num_image_tokens=4096,
-        num_prompt_tokens=5,
-        block_size=128,
-        batch_size=2,
-        num_heads=12
-    )
-
-    # Run attention
-    output = block_sparse_attn(
-        q, k, v,
-        cu_seqlens_q, cu_seqlens_k,
-        head_mask_type, mask,
-        max_seqlen_q, max_seqlen_k
-    )
-"""
-
 import torch
 import block_sparse_attn_cuda  # The compiled C++ extension
 from typing import Optional, Tuple

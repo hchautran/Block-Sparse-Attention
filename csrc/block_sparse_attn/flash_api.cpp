@@ -123,7 +123,7 @@ void run_mha_fwd(Flash_fwd_params &params, cudaStream_t stream) {
 // Main SAM attention forward function
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
-constexpr int SPARSE_SIZE = 128;
+constexpr int SPARSE_SIZE = 32;
 
 std::vector<at::Tensor>
 mha_varlen_fwd(

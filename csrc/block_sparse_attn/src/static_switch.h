@@ -40,10 +40,21 @@
 
 #define HEADDIM_SWITCH(HEADDIM, ...)                         \
   [&] {                                                      \
-    if (HEADDIM <= 64) {                                     \
-      constexpr static int kHeadDim = 64;                    \
+    if (HEADDIM <= 80) {                                     \
+      constexpr static int kHeadDim = HEADDIM;                    \
       return __VA_ARGS__();                                  \
     }                                                        \
-    throw std::runtime_error("Only head_dim <= 64 supported");\
+    throw std::runtime_error("Only head_dim <= 80 supported");\
+  }()
+  
+
+
+#define BLOCK_SIZE_SWITCH(BLOCK_SIZE, ...)                         \
+  [&] {                                                      \
+    if (BLOCK_SIZE <= 128) {                                     \
+      constexpr static int kHeadDim = HEADDIM;                    \
+      return __VA_ARGS__();                                  \
+    }                                                        \
+    throw std::runtime_error("Only head_dim <= 80 supported");\
   }()
   
