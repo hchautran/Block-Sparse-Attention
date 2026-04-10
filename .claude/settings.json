@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//venv/**)",
+      "Read(//venv/main/lib/**)",
+      "Bash(/venv/main/bin/pip show:*)",
+      "Bash(/venv/main/bin/pip list:*)",
+      "Bash(python3 -c \"from transformers import Sam3VisionModel; print\\('Sam3 OK'\\)\")",
+      "Bash(python3 -c \"from transformers import Sam2Model; print\\('Sam2 OK'\\)\")",
+      "Bash(python3 -c ':*)",
+      "Read(//root/**)",
+      "Read(//workspace/**)",
+      "Bash(mount)"
+    ],
+    "additionalDirectories": [
+      "/workspace/.hf_home/hub/models--facebook--sam-vit-large"
+    ]
+  }
+}
