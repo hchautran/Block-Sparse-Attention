@@ -219,7 +219,6 @@ def profile_vision_encoder(
     dtype: torch.dtype,
 ):
     backbone = vision_enc.backbone     # Sam3ViTModel
-    print(backbone)
     neck     = vision_enc.neck         # Sam3VisionNeck
     cfg      = backbone.config
 

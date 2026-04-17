@@ -642,6 +642,7 @@ def run(M: int, N: int, K: int):
         .permute(1, 2, 0)  # (M, K, L) K-contiguous
         .cuda()
     )
+    print(a_torch.shape)
     b_torch = (
         torch.empty(L, N, K, dtype=torch.int32)
         .random_(-2, 2)
@@ -649,7 +650,9 @@ def run(M: int, N: int, K: int):
         .permute(1, 2, 0)  # (N, K, L) K-contiguous
         .cuda()
     )
+    print(b_torch.shape)
     c_torch = torch.zeros(L, M, N, dtype=torch.float16).permute(1, 2, 0).cuda()
+    print(c_torch.shape)
 
     # CuTe tensors with layout annotations
     # is_mode0_major=False means mode1 (K or N) is contiguous = row-major
@@ -705,6 +708,9 @@ def run(M: int, N: int, K: int):
     for _ in range(warmup):
         compiled_gemm(mA, mB, mC)
     torch.cuda.synchronize()
+    print(mA)
+    print(mB)
+    print(mC)
 
     start = torch.cuda.Event(enable_timing=True)
     end = torch.cuda.Event(enable_timing=True)
@@ -730,7 +736,7 @@ if __name__ == "__main__":
         description="FP16 Matmul kernel optimized for A100 (SM80)"
     )
     parser.add_argument(
-        "--mnk", type=str, default="32, 32, 64",
+        "--mnk", type=str, default="4096, 1024, 1024",
         help="M,N,K dimensions (comma-separated)",
     )
     args = parser.parse_args()
